@@ -1,0 +1,42 @@
+# build outputs
+*.iml
+.gradle/
+build/
+app/build/
+local.properties
+captures/
+# ...except the versioned wire captures a parser is written against (4.5). Those are deliberate,
+# dated, attributed fixtures - the opposite of the throwaway /tmp captures this rule guards.
+!app/src/test/resources/captures/
+.cxx/
+
+# generated data (rebuilt by `python3 tools/build_refdb.py` / CI)
+data/ref/*.db
+data/ref/*.db.gz
+data/ref/*.sql
+data/ref/*.json
+data/ref/routes.*
+!data/ref/.gitkeep
+app/src/main/assets/ref/*.gz
+app/src/main/assets/ref/*.dbgz
+app/src/main/assets/ref/*.json
+
+# downloaded reference dumps
+.cache/
+
+# Production signing material must never be committed. The single explicit exception is
+# the public debug-only test key: it cannot sign production releases.
+*.keystore
+*.jks
+*.p12
+!tools/ci/test-only-debug.p12
+keystore.properties
+secrets.*
+# User-supplied CDN correlation IDs and operator emails are private, never commit them.
+/private/
+
+# editor / OS noise
+.idea/
+.DS_Store
+__pycache__/
+*.pyc

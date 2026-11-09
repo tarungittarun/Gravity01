@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One radius, two insets, three column widths. The route table's columns are defined once so the header
+  row and the item layout line up to the pixel - a header that does not line up with its own table is
+  the fastest way to make a screen look broken, and a layout editor cannot see the other file.
+-->
+<resources>
+    <dimen name="gap">16dp</dimen>
+    <dimen name="gap_s">8dp</dimen>
+    <dimen name="gap_xs">4dp</dimen>
+    <dimen name="radius">16dp</dimen>
+    <dimen name="rail_w">22dp</dimen>
+    <dimen name="col_sched">108dp</dimen>
+    <!-- Shared by the fixed headings and stop rows. The 48dp marker frame
+         overlaps the schedule by 18dp and the station by 4dp. -->
+    <dimen name="route_station_spacer">26dp</dimen>
+    <dimen name="route_actual">72dp</dimen>
+    <dimen name="col_live">102dp</dimen>
+    <dimen name="col_km">44dp</dimen>
+    <dimen name="row_gap_running">34dp</dimen>
+    <dimen name="row_min_h">54dp</dimen>
+    <dimen name="chart_h">190dp</dimen>
+    <dimen name="progress_h">10dp</dimen>
+</resources>

@@ -1,0 +1,12 @@
+# erail.in · search identity, route and limited status attempts
+
+Distinct products on the **same host** must not be conflated. Sources: `v2/source/ErailTransport.kt`, `ErailPairParser.kt`, `v2/mirror/ErailRouteMirror.kt`, `remote/LiveProvider.kt#ErailProvider`, `remote/ErailWire.kt`. Real captured by-number/pair payloads under `app/src/test/resources/captures/erail-*` and a 16228 route-page capture; code and captures do not establish independent moving-train km.
+
+| Surface | Request / response actually mapped | UI use and omitted claims |
+| --- | --- | --- |
+| Pair listing | GET `/rail/getTrains.aspx?Station_From=<from>&Station_To=<to>&Trains=BOTH&Sort_Type=PVT&Language=0&DataSource=1`. `^`-separated `~` records: train number/name, origin/destination, boarding/alighting codes and **scheduled** pair times, duration, run-days. Header contains a feed-data stamp distinct from fetch time. | Optional search/results enrichment and corridor identity. Does **not** give this run's observed arrival/departure or GPS. The candidate website `/train-running-status?t=…` is not this wire contract. |
+| Number/identity tile | GET `/rail/getTrains.aspx?TrainNo=<number>&DataSource=1&Language=0` and a provider variant with `Cache`, `Flag` and selected `Date` for its tile. Capture contains timetable/identity, not accepted per-stop running minutes. | Overlay identity/route only if matched; status/last-refresh words not actual halt events. UA fixed in client; changing it is not a new feed. |
+| Route page | Browser-lane GET `/train-running-status/<number>`; captured full name-code halt list, cut before page date-selector navigation. | Validated *static* ordered halts, names and codes; missing times remain dashes. No moving point from a halt list. |
+| Other erail “live” diagnostic guesses | `FeedProbe` contains bounded URL/browser variants such as `/rail/getRunTrain.aspx` and `api.erail.in/runningstatus`; some were refused/shape-unverified. | Diagnostic attempts are **not connected production feeds**; do not infer a verified API or borrow a time from an unrelated tile. |
+
+**Request flexibility:** `Station_From/To`, train number and a tile `Date` are actually used for their *specified* search/identity question. Pair record field indices are pinned to captured bytes, unlike a guessed JSON schema. No supported erail request for an authenticated, dated, measured train position has been established; the candidate table's “exact arrival/departure/delay counters” is not certified by our connected tile.

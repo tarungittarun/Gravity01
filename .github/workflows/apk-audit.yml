@@ -1,0 +1,66 @@
+# One evidence report for the APK a person actually downloads, the four unit-test
+# partitions, and every installed-device partition. Called only by a full E2E
+# sweep; ordinary pushes still get Android and core-device CI without a duplicate
+# 31-emulator matrix. This file must remain on the SAME ref as e2e.yml.
+name: apk-quality-audit
+on:
+  workflow_call:
+    inputs:
+      e2e_run_id:
+        description: 'The caller E2E run id. The audit finds only the Android run with its exact SHA.'
+        required: true
+        type: string
+
+jobs:
+  evidence:
+    name: APK, source, UI, visual, device and timing audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+      contents: write # the exact root-cause report is also posted to this SHA
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify the actual downloadable APK and collect each independent gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          E2E_RUN_ID: ${{ inputs.e2e_run_id }}
+        shell: bash
+        run: |
+          set +e
+          python3 tools/ci/apk_audit.py --sha "$GITHUB_SHA" --e2e-run "$E2E_RUN_ID" \
+            --out apk-audit-report.md > /tmp/audit.log 2>&1
+          result=$?
+          cat /tmp/audit.log
+          echo "AUDIT_RESULT=$result" >> "$GITHUB_ENV"
+      - name: Publish reproducible audit evidence, even when a domain failed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-quality-audit
+          path: apk-audit-report.md
+          if-no-files-found: error
+          retention-days: 14
+      - name: Show root causes on the commit and in the run summary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if [ -f apk-audit-report.md ]; then
+            cat apk-audit-report.md >> "$GITHUB_STEP_SUMMARY"
+            gh api -X POST "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" \
+              -F body=@apk-audit-report.md || echo "::warning::commit comment unavailable; artifact has the report"
+          else
+            echo '::error::audit did not produce a report; inspect its preceding job log'
+          fi
+      - name: Enforce the strict verdict
+        if: always()
+        run: exit "${AUDIT_RESULT:-1}"

@@ -1,0 +1,32 @@
+# Explicit opt-in; this is source reconnaissance, not proof of past-journey accuracy.
+name: historical-actuals-probe
+on:
+  push:
+    branches: [main, 'arena/**']
+jobs:
+  sample:
+    if: contains(github.event.head_commit.message, '[history-probe]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python3 -m pip install --quiet pycryptodome
+      - name: Twenty dated requests; post evidence even when source unreachable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/probe_history.py > historical-results.json
+          cat historical-results.json >> "$GITHUB_STEP_SUMMARY"
+          { echo '### Historical actual-time source check (not independently verified)'; echo '```json'; cat historical-results.json; echo '```'; } > /tmp/history.md
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -F body=@/tmp/history.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: history-probe-20
+          path: historical-results.json
+          if-no-files-found: warn

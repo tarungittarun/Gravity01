@@ -1,0 +1,30 @@
+20651 - Sbc Tlgp Express
+Running
+Refreshing in 180 s
+On Time
+Source KRANTIVIRA SANGOLLI RAYANNA (BENGALURU)
+Date 12-Oct-2026
+Destination TALGUPPA
+0 km166 / 372 km · 45%372 km
+5 of 16 stations completed · 11 remaining
+Departed from Ballekere Halt at 12-Oct-2026 18:00. Next stoppage station is Kadur.
+Live Running Status Route & Timings
+KSR BENGALURU (SBC) Source Station -- 03:00 PM 12-Oct -- 03:00 PM 12-Oct Dep: RT 0 km PF: 9
+YESVANTPUR JN (YPR) Avg Speed: 14 km/h 03:10 PM 12-Oct 03:12 PM 12-Oct 03:22 PM 12-Oct 03:24 PM 12-Oct Arr: 12 mins Dep: 12 mins 5 km PF: 3
+TUMKUR (TK) Avg Speed: 71 km/h 04:00 PM 12-Oct 04:02 PM 12-Oct 04:20 PM 12-Oct 04:22 PM 12-Oct Arr: 20 mins Dep: 20 mins 71 km PF: 4
+TIPTUR (TTR) Avg Speed: 86 km/h 04:48 PM 12-Oct 04:50 PM 12-Oct 05:11 PM 12-Oct 05:13 PM 12-Oct Arr: 23 mins Dep: 23 mins 141 km PF: 3
+ARSIKERE JN (ASK) Avg Speed: 75 km/h 05:13 PM 12-Oct 05:15 PM 12-Oct 05:33 PM 12-Oct 05:39 PM 12-Oct Arr: 20 mins Dep: 24 mins 166 km PF: 2
+Currently near: BALLEKERE HALT Status: Departed from Ballekere Halt at 12-Oct-2026 18:00. Next stoppage station is Kadur. Platform 2
+KADUR (DRU) Avg Speed: -- 05:45 PM 12-Oct 05:46 PM 12-Oct Update Awaited Update Awaited Arr: RT Dep: RT 205 km PF: 2
+BIRUR JN (RRB) Avg Speed: -- 05:55 PM 12-Oct 05:57 PM 12-Oct Update Awaited Update Awaited Arr: RT Dep: RT 211 km PF: 2
+TARIKERE JN (TKE) Avg Speed: -- 06:23 PM 12-Oct 06:25 PM 12-Oct 06:23 PM 12-Oct 06:25 PM 12-Oct Arr: RT Dep: RT 235 km PF: 1
+BHADRAVATI (BDVT) Avg Speed: 74 km/h 06:42 PM 12-Oct 06:43 PM 12-Oct 06:42 PM 12-Oct 06:43 PM 12-Oct Arr: RT Dep: RT 256 km PF: 1
+SHIMOGA (SME) Avg Speed: 69 km/h 06:57 PM 12-Oct 06:58 PM 12-Oct 06:57 PM 12-Oct 06:58 PM 12-Oct Arr: RT Dep: RT 272 km PF:
+SHIMOGA TOWN (SMET) Avg Speed: 17 km/h 07:05 PM 12-Oct 07:10 PM 12-Oct 07:05 PM 12-Oct 07:10 PM 12-Oct Arr: RT Dep: RT 274 km PF: 1
+KUMSI (KMSI) Avg Speed: 75 km/h 07:30 PM 12-Oct 07:31 PM 12-Oct 07:30 PM 12-Oct 07:31 PM 12-Oct Arr: RT Dep: RT 299 km PF: 1
+ARASALU (ARU) Avg Speed: 69 km/h 07:45 PM 12-Oct 07:46 PM 12-Oct 07:45 PM 12-Oct 07:46 PM 12-Oct Arr: RT Dep: RT 315 km PF:
+ANANDAPURAM (ANF) Avg Speed: 53 km/h 08:03 PM 12-Oct 08:05 PM 12-Oct 08:03 PM 12-Oct 08:05 PM 12-Oct Arr: RT Dep: RT 330 km PF: 2
+SAGAR JAMBAGARU (SRF) Avg Speed: 56 km/h 08:33 PM 12-Oct 08:35 PM 12-Oct 08:33 PM 12-Oct 08:35 PM 12-Oct Arr: RT Dep: RT 356 km PF: 1
+TALGUPPA (TLGP) Avg Speed: 14 km/h 09:45 PM 12-Oct -- 09:45 PM 12-Oct -- Arr: RT 372 km PF: 1
+Coach Position
+Engine ENG SLRD GEN GEN GEN GEN D8 D7 D6 D5 D4 D3 D2 D1 C1 GEN GEN GEN GEN LPR Guard

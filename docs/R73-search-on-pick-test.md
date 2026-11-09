@@ -1,0 +1,5 @@
+# R73 — do not tap Find after an automatic search
+
+Before the R72 replacement device row booted, another test-harness mismatch was found in the R71 failures: `MainActivity.wireBoxes` starts a train search on picking a train and a station-pair search on picking the second station. If that search returns hits, `renderReport` hides the form under **Edit search**. Several device tests then immediately tried to tap the now-hidden Find button. That was duplicate work on a slow connection and, when asserted, a false failure. R73 uses the successful suggestion selection as the trigger and awaits the visible result. The explicit Find-button tests for blank and unknown queries remain intact.
+
+This is a harness correction, not a claim that search works for every train. The replacement run must still pass before calling these flows green. R71 e2e run `38634410193` was red with real device assertions; its coverage report was 52.4%, not a substitute for passing tests. PR #3 remains open and unmerged.

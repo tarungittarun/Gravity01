@@ -1,0 +1,15 @@
+# R162 · Website request audit, 1 November 2026
+
+## Proven observations
+
+The owner's 17:39 phone diary (`opentrack-diary-20261101-173942.txt`, held outside the repository) is R161 on Wi-Fi with VPN off and validated connectivity. The `.org.in` request for train 20651 received **HTTP 403** seven times between 17:38:31 and 17:39:04. Each returned zero page bytes, no website report and no qualifying website position. The same phone received NTES actual stop data: last reported departure ASK 17:28. A GitHub-runner trial also got 403 for both 20689 and 16227, but its IP/network is not the phone's. Older 26–28 October phone diaries show many successful `.org.in` replies, including multiple requests just seconds apart. The site owner's logs or an authorized feed agreement are needed to establish whether access rules changed, when, and why.
+
+## Our avoidable request behavior
+
+- Normal-mode first load previously surveyed `.org.in` even with NTES selected; selecting the site and manually refreshing could ask again within seconds. Background comparison/recheck paths could also ask it. On the new diary, seven GETs occurred in 33 seconds. This was not respectful traffic design. It cannot establish that those seven requests *caused* an existing 403—the first already failed—but it risks aggravating a refusal.
+- The code presented a generic Android Chrome User-Agent while using Java HTTP, forced `no-cache`/`Pragma` and had a retry for dropped website sockets. The same header was present during prior successful phone requests; no evidence proves it caused the 403. Pretending to be Chrome was nevertheless wrong, and a browser identity cannot make an app a sanctioned client.
+- R161 already stopped IPv4-retrying a completed HTTP refusal. R162 removes unnecessary initial `.org.in` surveying on NTES screens, removes Chrome impersonation and forced revalidation on this website (the shared HTTP helper supplies an honest app User-Agent), makes only one normal website GET per ask, and declines stale HTTP cache fallback for this endpoint so that a 403 cannot masquerade as a cache answer. A host-wide 15-minute refusal pause survives screen recreation and train-number changes. No automatic or manual retry inside the pause; the UI says **no new request** and reports time remaining. A fresh page answer clears the pause.
+
+The site may still return 403 to an honest, less frequent request. This change reduces app-caused load and improves attribution; **it does not defeat a website block or obtain WIMT phone-app data**. Use NTES with its own source label until the site itself answers or its operator authorizes a documented integration. The independent `.in` candidate cache is not a replacement for qualified `.org.in` website reporting. Do not infer train position from page refresh or elapsed timetable.
+
+Tests: transport/pacing unit tests, source-header and retry-count tests, CI Android APK build and published-APK travellers. The read-only runner probe asks 20689 once with the declared app identity, not a Chrome imitation; its result is a runner observation only. Real phone acceptance is still required, and PR #3 remains unmerged.

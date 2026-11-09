@@ -1,0 +1,16 @@
+OpenTrack India — quick test card (full card: docs/TEST_CARD.md)
+
+Install: https://github.com/tarungittarun/Checktrain02/releases/download/latest-apk/app-debug.apk
+
+NEW 2026-10-12 (90 seconds): search SMET -> MYS. Rows appear, then upgrade with "via erail"
+(incl. 16221 Kuvempu Express). Top line gains the live sentence. Airplane mode + search again:
+it must SAY "no live list reached this device - every time below is the timetable".
+
+Then the two standing checks from the full card: (1) offline search always works and says so;
+(2) live status either names its source or admits it is the timetable - never a schedule minute
+dressed up as a live one. If anything crashes: Settings -> diagnostics on, reproduce, Save to
+file, PASTE the text here (attachments arrive empty).
+
+THE BIG ONE (60 s, unlocks live arrival/departure times): Settings -> diagnostics ON -> open any
+train running right now -> wait 20 s -> Settings -> Save to file -> PASTE the text in chat.
+Only your phone reaches the railway's live feed; that paste is the whole unblock.

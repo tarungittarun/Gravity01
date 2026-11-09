@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="." />
+        <exclude domain="file" path="ref" />
+        <exclude domain="file" path="live" />
+        <exclude domain="cache" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="sharedpref" path="." />
+        <!-- A device transfer may carry the extracted DB: it is version-checked on open, and 14 MB of
+             already-verified data is worth skipping one extraction for. -->
+        <exclude domain="file" path="live" />
+    </device-transfer>
+</data-extraction-rules>

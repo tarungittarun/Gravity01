@@ -1,0 +1,20 @@
+// OpenTrack India — project-level settings.
+// Repositories are pinned to Google + Maven Central only: no jitpack, no third-party mirrors.
+// That is a supply-chain decision as much as a build one — the app ships to the public without an
+// app-store review, so the dependency graph has to be auditable at a glance.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "OpenTrackIndia"
+include ":app"

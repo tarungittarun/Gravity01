@@ -1,0 +1,10 @@
+# R135 · R132 data path retained, three tracking display changes only
+
+Owner correction: R132 was the working baseline. R134 incorrectly changed selected-website source handling, fallback and station-card presentation in response to a request for UI changes. This build **removes R134's website selection/rail-claim changes** and restores its modified source/UI files to the R133 state; R133 itself left R132 ingestion and source admission untouched. No Where Is My Train request, parser, cache, source-selection, refresh/fallback, provenance or position policy is changed relative to R132. The fixed session branch and PR stay open; no merge without owner confirmation.
+
+The requested display changes are:
+1. Delay ink is early green, positive late red and on-time neutral, with day/night readable palettes.
+2. The source-supported intermediate train symbol shows `At …` and `As on …` only while mapped stations are collapsed. A pinned **reported halt** now also shows `At [station] · last report` / `As on [event time]` beside its train symbol while intermediates are collapsed. Expanded stations hide these captions; neither case promotes a website page-update timestamp to a train event.
+3. A classified connection failure pulses the top card three times a second for two seconds, gives a brief shake and leaves a source-named reason visible. It does not re-age a train event.
+
+The version/code advance to R135/65 only to allow an in-place upgrade from the previously distributed R134/code-64 debug APK; the test-only update signing key is unchanged. `InlineRouteRenderTest`, `ConnectionCueAndDelayTest`, `RefreshFlashTest` and `BuildIdentityTest` guard the presentation. Compare against R132 with `git diff 16b2faa..HEAD -- app/src/main/java/in/opentrack/india/ui/LiveViewModel.kt app/src/main/java/in/opentrack/india/v2/mirror app/src/main/java/in/opentrack/india/ui/RefreshReceiptText.kt`: it must be empty. Android CI and any installed-APK traveller checks are not proof of owner-phone success. Full E2E was not requested for this correction.

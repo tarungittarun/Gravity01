@@ -1,0 +1,61 @@
+{
+ "_why": [
+  "A small set of facts about the Indian railway timetable that a human verified against a live",
+  "source, written down so that our own offline dataset can be tested against reality instead of",
+  "against the last build that happened to look plausible.",
+  "",
+  "This is not a data source. It never grows into a schedule: it is 6-8 assertions, and the moment",
+  "it needs more than that it is the wrong tool (the fix is a live feed, not a bigger fixture).",
+  "",
+  "Deliberate omissions: NO departure/arrival minutes, and no platform numbers. Those legitimately",
+  "differ day to day and revision to revision, so pinning them here would make the gate red for the",
+  "wrong reason and train everyone to ignore it. Identity (number -> name -> origin/terminal) and",
+  "presence (does a station pair list this train at all) are the two things that do not move under a",
+  "passenger's feet and are exactly the two things the app got wrong on 11 Oct 2026."
+ ],
+ "verifiedOn": "2026-10-12",
+ "verifiedAgainst": "Where Is My Train (live IR feed) on the product owner's device, 23:20 IST 2026-10-11, plus the app's own screenshot of the same train; 16221 re-verified and corrected 2026-10-12 by owner word, seconded by the erail.in live answer from the CI probe on ac06f62",
+ "trains": [
+  {
+   "train_no": "16228",
+   "name": "TALGUPPA MYSURU EXPRESS",
+   "from": "TLGP",
+   "to": "MYS",
+   "note": "The device showed this number as 'SHIMOGA-BANGALORE EXPRESS SMET->SBC 274 km' - a different train wearing the same number."
+  },
+  {
+   "train_no": "16226",
+   "name": "SMET MYS EXP",
+   "from": "SMET",
+   "to": "MYS",
+   "note": "Loose name match allowed; route is the assertion."
+  },
+  {
+   "train_no": "16221",
+   "name": "KUVEMPU EXPRESS",
+   "from": "TLGP",
+   "to": "MYS",
+   "note": "CORRECTED 2026-10-12 by owner word (the acceptance authority): 16221 is the KUVEMPU EXPRESS, agreeing with erail.in's live identity answer of 2026-10-12 (CI probe on ac06f62: 'TLGP-MYS KUVEMPU EXPRESS', TLGP->MYS) and with erail listing 16221 on the SMET->MYS pair. The earlier entry (KAVERI EXPRESS, MAS->MYS, from the 23:20 IST 11 Oct reading) was wrong and is superseded here, with provenance, so a tool never re-litigates it silently."
+  }
+ ],
+ "pair_lists": [
+  {
+   "from": "SMET",
+   "to": "MYS",
+   "must_include": [
+    "16221",
+    "16226",
+    "16205",
+    "16228"
+   ],
+   "note": "Four services the live feed listed for this pair on 11 Oct 2026; the app listed 06228/16226/16205/56269 and no 16221 at all.",
+   "must_not_include": []
+  }
+ ],
+ "numbering": {
+  "retired_prefix": "0",
+  "max_retired_pct": 2.0,
+  "why": "Five-digit numbers beginning with 0 (06228, 07301, ...) were renumbered out of existence by several zones in 2022-23. A dataset where 10.9% of trains still carry them predates that revision, whatever its git commit date says - so the ETL must not describe freshness by commit date alone."
+ },
+ "_pending": "must_not_include is empty on purpose. The gate supports phantom-train checks (a service we show that the railway does not run on the pair), and the obvious first entry was 06228 - we list 'SHIMOGA MYSORE EXPRESS 22:10->07:00' on SMET->MYS while the live source listed 16228 there. But 0-prefixed numbers are still used by some zones for festival/special trains, so 'we show a retired number' is not yet proof of 'this train does not exist'. The evidence that would close it is one live pair answer for SMET->MYS (the CI probe or a device log). Until then the honest state is 'suspected phantom', recorded in STATUS, not asserted in a fixture - fabricating a fact to make a test green is the failure mode this whole file exists to stop."
+}

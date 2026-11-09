@@ -1,0 +1,41 @@
+# Explicit one-off first-navigation observation by a real Chrome binary on a GitHub runner.
+# The user's Android Chrome/IP/session is NOT the runner. No challenge or cookie replay.
+name: browser-request-capture
+on:
+  push:
+    branches: ['arena/**']
+    paths:
+      - 'tools/ci/browser_request_capture.py'
+      - '.github/workflows/browser-request-capture.yml'
+permissions:
+  contents: write # publish only redacted metadata on this commit; Actions log host can be unavailable
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline metadata and redaction gates
+        run: python3 tools/ci/browser_request_capture.py --self-test
+      - name: One browser navigation, only with explicit opt-in commit marker
+        if: contains(github.event.head_commit.message, '[browser-capture]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m pip install --disable-pip-version-check selenium==4.27.1
+          python3 tools/ci/browser_request_capture.py 20652 > browser-request-result.json
+          { echo '### Independent .org.in website: runner Chrome first navigation';
+            echo 'Not Android Chrome, Google WIMT phone telemetry or verified train data.';
+            echo 'No challenge-solving, cookie collection, page-body reading or retry.';
+            echo '```json'; cat browser-request-result.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          cat browser-request-result.json
+          { echo '### One runner-Chrome browser navigation (not phone access)';
+            echo '```json'; cat browser-request-result.json; echo '```'; } > browser-result-comment.md
+          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
+            -F body=@browser-result-comment.md > /dev/null
+      - name: No live request by default
+        if: ${{ !contains(github.event.head_commit.message, '[browser-capture]') }}
+        run: echo 'Offline guards only; no website navigation.'

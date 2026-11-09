@@ -1,0 +1,76 @@
+# Report-only recovery from an ALREADY RUN device trial: zero new .org.in GETs.
+# Source screenshots are required; no generated/mock pixels can stand in for them.
+name: wimt-device-screenshot-pdf
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: 'Existing installed-app run with a UI-confirmed HTTP 403 and a real final.png'
+        required: true
+        type: string
+      source_sha:
+        description: 'Exact 40-character commit SHA of the captured installed-app run'
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: write # attach the finished PDF to the existing rolling APK release
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # Download only the specifically identified still-existing device capture.
+      # The original run 42026847014 is deleted by the six-hour policy.
+      - uses: actions/download-artifact@v4
+        with:
+          name: wimt-device-evidence
+          run-id: ${{ inputs.source_run }}
+          github-token: ${{ github.token }}
+          path: captured-wimt-device
+      - name: Create a PDF containing only the actual failed-source screenshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build
+          python3 -m pip install --disable-pip-version-check --quiet reportlab==4.2.5
+          set +e
+          python3 tools/ci/build_wimt_pdf.py captured-wimt-device \
+            "build/wimt-website-device-${{ inputs.source_run }}.pdf" \
+            "${{ inputs.source_run }}" "${{ inputs.source_sha }}" 2> build/pdf-error.txt
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            { echo '### PDF construction failed (no new website request)';
+              echo 'Actual files in the earlier device artifact:';
+              find captured-wimt-device -type f -printf '%P (%s bytes)\n' | head -40;
+              echo 'Bounded error:'; tail -20 build/pdf-error.txt; } > build/pdf-diagnostic.md
+            cat build/pdf-diagnostic.md >> "$GITHUB_STEP_SUMMARY"
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -F body=@build/pdf-diagnostic.md > /dev/null || true
+            exit "$status"
+          fi
+          test -s "build/wimt-website-device-${{ inputs.source_run }}.pdf"
+          sha256sum "build/wimt-website-device-${{ inputs.source_run }}.pdf"
+      - name: Publish direct PDF link on existing rolling APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pdf="build/wimt-website-device-${{ inputs.source_run }}.pdf"
+          gh release upload latest-apk "$pdf" --clobber
+          link=https://github.com/${GITHUB_REPOSITORY}/releases/download/latest-apk/$(basename "$pdf")
+          printf '### WIMT website in-app device trial - failed HTTP 403\n\nPDF with actual retained screenshot(s): %s\n\nSource: Actions run ${{ inputs.source_run }}. No new website request; not phone-app data or a successful WIMT feed. Earlier run 42026847014 images were deleted by artifact cleanup.\n' "$link" \
+            | tee "$GITHUB_STEP_SUMMARY" > build/pdf-report-link.md
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            -F body=@build/pdf-report-link.md > /dev/null
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wimt-failed-website-pdf
+          path: build/wimt-website-device-*.pdf
+          if-no-files-found: warn
+          retention-days: 14

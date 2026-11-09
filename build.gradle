@@ -1,0 +1,7 @@
+// OpenTrack India — build configuration.
+// Deliberately minimal: no flavour matrix, no build variants beyond debug/release, no plugin that is
+// not load-bearing. Every extra plugin is a supply-chain surface and a source of CI flakiness.
+plugins {
+    id "com.android.application" version "8.5.2" apply false
+    id "org.jetbrains.kotlin.android" version "1.9.24" apply false
+}

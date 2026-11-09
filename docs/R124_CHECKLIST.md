@@ -1,0 +1,20 @@
+# R124 · TrackTrain owner checklist (17 Oct 2026)
+
+Owner inputs: screenshots of 12089 at Yesvantpur and the route-search/Data source screens, app `1.0.52-r123`. This checklist is for the next APK (`1.0.53-r124`); these older screenshots are not verification of it.
+
+| Request | Work | Acceptance / limitation |
+| --- | --- | --- |
+| E2E must run only when explicitly requested | Opt-in `[e2e-request]` push tag or workflow dispatch; untagged pushes skip the plan, build, emulators, report and audit. This request authorizes **one** tagged full sweep at the end. | Do not run it on subsequent pushes unless asked again. |
+| Cut E2E wall to 25% of previous | Baseline 833s on R123 ⇒ **target ≤208s**. Split tracking instrumentation from 4 to 8 independently booted shards for API 34, API 24 and large-font/density (31→43 required rows); keep exact coverage, SDK/density/release and strict audit gates. | Measure the replacement. More runners may cause queuing; a split is not itself proof of speed. Do not call a run “25%” unless its measured wall is ≤208s. |
+| Rename app and use train marker logo | Label/Home/Settings/diagnostic share updated to TrackTrain; launcher vector reuses blue round train badge motif from rail marker. | Package and update signing unchanged, versionCode advances to 54. |
+| Remove redundant prose | Visible website/last-stop captions and MOTION UNKNOWN banner shortened or hidden; source/time accessibility and marker description remain. | Missing telemetry still never becomes an asserted current location. |
+| Show route-list operating days | A live pair update now retains the matched offline timetable's Sunday→Saturday run mask. Existing initials/underlining render those verified masks. | Live-only or unknown-mask trains still show “days unavailable”: one dated listing cannot establish a weekly calendar. No fabricated daily service. |
+| Remove long Home data banner | Short visible “Timetable · check before travel”; full unverified-data warning remains available as accessibility description and in Settings/source warnings. | Keep the safety warning, not a misleading trusted timetable label. |
+| Explain live data endpoint | Settings now labels it advanced optional compatible JSON override; leave blank for built-in source, distinct from the Home/Tracking source selector. | Preserve working fallback and user-configurable adapter for custom feeds. |
+
+## Verification status
+
+- Before this change: R123 E2E 39030697741 ran 833s, 31/31 device partitions green, strict DEX correspondence, phone parity and 180s job target red. Android 39030697742 ran 358s and published the R123 APK. No R124 Android build, optimised E2E or APK has passed yet.
+- Static balance/resources/member checks and 63 Python CI self-tests passed locally. [Android replacement 39035771929](https://github.com/tarungittarun/Checktrain02/actions/runs/39035771929) passed build, 34 render tests, JVM partitions and APK traveller checks for `900aa66`. [Android 39036240542](https://github.com/tarungittarun/Checktrain02/actions/runs/39036240542) passed on the requested-run SHA `dce5b6b`: 384 JVM cases and six traveller partitions.
+- **First opt-in E2E measurement:** [39036240538](https://github.com/tarungittarun/Checktrain02/actions/runs/39036240538) on `dce5b6b` took **1082s (18m02s)** from GitHub's createdAt to updatedAt, **30% slower** than the 833s R123 baseline; 42/43 rows passed. The failed density/large-font `track4` row ran three methods with one failure selecting the 12627 suggestion, not a timetable or telemetry discrepancy. The report and strict audit are red; the independent DEX correspondence, live phone parity and 180s-per-job budget are still unmet. The eight-way shard split alone did **not** deliver the ≤208s target; queueing, repeated builds and emulator boot dominate. No claim of 25% speed or full E2E success. A bounded real-selection retry with diagnostics is being verified; it does not turn a failed selection into a pass.
+- Earlier R124 compilation/render failures were fixed and are not counted as green. Phone confirmation remains outstanding. PR #3 must remain open until owner confirms on phone.

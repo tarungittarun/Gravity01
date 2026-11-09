@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only preferences are backed up. The 14 MB SQLite file and the HTTP cache are re-derivable from the
+     APK and from the network, so shipping them through Auto Backup would waste the user's quota and,
+     worse, restore a stale live snapshot onto a new phone. -->
+<full-backup-content>
+    <include domain="sharedpref" path="." />
+    <exclude domain="file" path="ref" />
+    <exclude domain="file" path="live" />
+    <exclude domain="cache" path="." />
+</full-backup-content>

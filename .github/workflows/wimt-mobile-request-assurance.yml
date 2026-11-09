@@ -1,0 +1,153 @@
+# Two genuinely separate questions: our installed Android client's behavior under
+# test-owned replies, and whether the independent WEBSITE ACTUALLY admitted it.
+# This workflow never makes a GET to that website. A green simulation cannot
+# turn its real 403 into a green source-access verdict.
+name: wimt-mobile-request-assurance
+on:
+  push:
+    branches: ['arena/6f68e526-checktrain02']
+    paths:
+      - '.github/workflows/wimt-mobile-request-assurance.yml'
+      - 'tools/ci/run_wimt_simulation.sh'
+      - 'tools/ci/verify_wimt_simulation.py'
+      - 'tools/ci/audit_wimt_assurance.py'
+      - 'tools/ci/test_wimt_assurance.py'
+      - 'app/src/main/java/in/opentrack/india/core/Http.kt'
+      - 'app/src/main/java/in/opentrack/india/core/WebsiteBrowserRequest.kt'
+      - 'app/src/main/java/in/opentrack/india/ui/LiveViewModel.kt'
+      - 'app/src/main/java/in/opentrack/india/v2/mirror/PublicPageChecks.kt'
+      - 'app/src/androidTest/java/in/opentrack/india/e2e/WimtMobileRequestSimulationTest.kt'
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write # post bounded, source-honest verdict to commit
+jobs:
+  simulated-contract:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[wimt-assurance]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+      - name: Request contract and site-independent policy fixtures
+        run: |
+          python3 tools/ci/test_site_request_trial.py
+          python3 tools/ci/site_request_trial.py --contract
+          python3 tools/ci/test_wimt_assurance.py
+          python3 tools/ci/check_workflows.py
+          bash -n tools/ci/run_wimt_simulation.sh
+      - name: Build the offline timetable required by the APK
+        run: bash tools/ci/prepare_asset.sh
+      - name: Legacy Java HTTP helper wire, website parser and refusal pacing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          ./gradlew --no-daemon :app:testDebugUnitTest \
+            --tests 'in.opentrack.india.core.HttpStatusRetryTest' \
+            --tests 'in.opentrack.india.v2.mirror.WebsiteRequestPacingTest' \
+            --tests 'in.opentrack.india.v2.mirror.OrgWebsiteStatusTest' \
+            > /tmp/wimt-sim-gradle.log 2>&1
+          result=$?
+          set -e
+          if [ "$result" -ne 0 ]; then
+            { echo '### Local mobile-request simulation build/test failed';
+              echo 'Bounded Gradle tail (test-owned data only; no website GET):';
+              echo '```';
+              grep -E '(^e: |^> |^\* What went wrong:|^Execution failed|^.*FAILED|^Caused by:|^.*No tests found|^.*error:)' /tmp/wimt-sim-gradle.log | head -55 | cut -c 1-240 || true;
+              echo '--- last 30 lines ---'; tail -30 /tmp/wimt-sim-gradle.log | cut -c 1-240;
+              echo '```'; } > /tmp/wimt-sim-error.md
+            cat /tmp/wimt-sim-error.md >> "$GITHUB_STEP_SUMMARY"
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -F body=@/tmp/wimt-sim-error.md > /dev/null || true
+            exit "$result"
+          fi
+          tail -12 /tmp/wimt-sim-gradle.log
+      - name: Simulation scope is not website access
+        run: |
+          echo '### Local wire/response-policy simulations: PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Legacy Java helper and parser fixtures only; the selected WebView network path is tested by the separate source-strict device run. No WIMT website GET or CDN unblock is proved here.' >> "$GITHUB_STEP_SUMMARY"
+  android-emulator:
+    needs: simulated-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+      - name: Build the exact app + Android-test APKs with timetable asset
+        run: |
+          bash tools/ci/prepare_asset.sh
+          ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+      - name: 'Real API34 emulator: offline launch/track + 403/challenge simulations'
+        run: bash tools/ci/run_wimt_simulation.sh
+      - name: Report screenshot verification, NOT website permission
+        if: always()
+        run: |
+          if [ -s wimt-simulation-evidence/verified.json ]; then
+            echo '### Installed app on an offline emulator: simulation PASS' >> "$GITHUB_STEP_SUMMARY"
+            cat wimt-simulation-evidence/verified.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '### Installed-app simulation did not pass; inspect bounded instrumentation/artifact.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wimt-mobile-simulation-evidence
+          path: wimt-simulation-evidence/
+          if-no-files-found: warn
+          retention-days: 7
+  live-source-verdict:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[wimt-assurance]'))
+    needs: [simulated-contract, android-emulator]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit actual latest source-strict device run without requesting the website
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIMULATED: ${{ needs.simulated-contract.result }}
+          ANDROID: ${{ needs.android-emulator.result }}
+        run: |
+          set -euo pipefail
+          endpoint="repos/${GITHUB_REPOSITORY}/actions/workflows/wimt-device-acceptance.yml/runs?branch=arena/6f68e526-checktrain02&per_page=20"
+          run=$(gh api "$endpoint" --jq '[.workflow_runs[] | select(.status == "completed" and .conclusion != "skipped")][0].id // empty')
+          : "${run:?no completed source-strict installed-APK run; cannot certify website access}"
+          state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}" --jq .conclusion)
+          {
+            echo '### WIMT website access assurance (distinct from simulation)'
+            echo "- Local policy/JVM tests: $SIMULATED"
+            echo "- Installed APK offline emulator scenarios: $ANDROID"
+            echo "- Last real source-strict installed-APK run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run}"
+            echo "- That run's source-strict conclusion: $state"
+            echo '- A local/browser simulation CANNOT certify the website will admit an APK.'
+          } > assurance.md
+          if [ "$SIMULATED" != success ] || [ "$ANDROID" != success ] || [ "$state" != success ]; then
+            echo '- Verdict: BLOCKED_OR_UNVERIFIED. Do not count this as working WIMT data.' >> assurance.md
+            cat assurance.md >> "$GITHUB_STEP_SUMMARY"
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" -F body=@assurance.md > /dev/null || true
+            exit 2
+          fi
+          mkdir -p proof
+          gh run download "$run" -n wimt-device-evidence -D proof
+          python3 tools/ci/audit_wimt_assurance.py proof >> assurance.md
+          cat assurance.md >> "$GITHUB_STEP_SUMMARY"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" -F body=@assurance.md > /dev/null

@@ -1,0 +1,785 @@
+# One row of the device matrix: boot an emulator, install the APKs CI built, drive the app with
+# UiAutomator, measure coverage, monkey it, and report the row on the commit - pass or fail.
+#
+# It is a composite action rather than inline YAML because the same steps run for two different sets of
+# rows: the core pair on every push, and the density/release pair only when the event asks for the full
+# matrix. Inlining them would mean two places to forget a fix, and this file's history is a list of
+# things that were forgotten once already. Keep the row knobs as env vars (see `runs.env`) so no caller
+# can inject a space into a command line through a description or a device profile name.
+name: e2e-row
+description: Boot an emulator, install the built APKs, drive them from outside the process, report.
+inputs:
+  github_token:
+    description: "the job's GITHUB_TOKEN, passed in because the secrets context is not available inside a composite action"
+    required: false
+    default: ""
+  row:
+    description: "matrix row name; used in artifact names and in the commit comment"
+    required: true
+  desc:
+    description: "one line on what this row is for"
+    required: false
+    default: ""
+  api:
+    description: "Android API level of the system image"
+    required: true
+  img:
+    description: "system-image variant: google_apis or default"
+    required: true
+  abi:
+    description: "system-image ABI"
+    required: true
+  device:
+    description: "AVD hardware profile"
+    required: true
+  variant:
+    description: "which APK to install: debug or release"
+    required: true
+  location:
+    description: "granted or denied - the runtime-permission row"
+    required: false
+    default: ""
+  offline:
+    description: "true also runs the degradation pass with the radio off"
+    required: false
+    default: ""
+  monkey:
+    description: "random events for the stability pass; 0 skips it"
+    required: false
+    default: ""
+  wm_size:
+    description: "optional adb wm size override, e.g. 1080x2160"
+    required: false
+    default: ""
+  wm_density:
+    description: "optional adb wm density override, e.g. 440"
+    required: false
+    default: ""
+  font_scale:
+    description: "optional font_scale setting, e.g. 1.15"
+    required: false
+    default: ""
+  focus:
+    description: "run only this test class (empty runs the whole suite)"
+    required: false
+    default: ""
+  group:
+    description: "parallel device partition: station0/1/2, train, track0..3, settings-ui/net, settings, or release"
+    required: false
+    default: ""
+  boot_timeout:
+    description: "seconds emulator_boot.sh may spend bringing the image up"
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      continue-on-error: true  # reporting must survive a red step; the verdict step decides
+    - name: Start the row's clock
+      # The job has timeout-minutes: 80, and a job GitHub cancels mid-flight leaves nothing: no comment, no
+      # artifact, no roll-up line. The row therefore keeps its own deadline below that, and every phase
+      # compares against it - the classes that cannot fit are reported as skipped, which is information,
+      # rather than being cancelled, which is not.
+      id: clock
+      shell: bash
+      run: |
+        minutes=${ROW_BUDGET_MINUTES:-58}
+        case "$minutes" in (*[!0-9]*|'') minutes=58 ;; esac
+        echo "row_deadline=$(( $(date +%s) + minutes * 60 ))" > /tmp/deadline
+        echo "row budget ${minutes}m; the last minutes belong to diagnostics, the artifact and the comment"
+        echo "row_started=$(date +%s)" >> /tmp/diag.env
+
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+      continue-on-error: true  # reporting must survive a red step; the verdict step decides
+    - name: Fetch the APKs and the coverage classes (one step, timed, so a slow artifact service is visible)
+      # This was four `download-artifact@v4` steps: no trace line, no wall clock, no per-artifact outcome,
+      # and inside a composite action their steps are not individually visible from the API at all. When a
+      # row sat 29 minutes without a single annotation, that block was the one place a hang could hide with
+      # no evidence either way. `gh run download` is the same service with a timeout per pull and one line
+      # each into the log, the artifact and - on failure - the annotation stream.
+      id: fetch
+      continue-on-error: true  # a failed download must still post a row comment and final verdict
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      shell: bash
+      run: |
+        mkdir -p /tmp/apk /tmp/classes
+        fetch_started=$(date +%s); missing=false
+        specs=("apk-debug:/tmp/apk" "apk-debug-androidTest:/tmp/apk" "e2e-classes:/tmp/classes")
+        if [ "$VARIANT" = release ]; then specs+=("apk-release:/tmp/apk"); fi
+        for spec in "${specs[@]}"; do
+          name=${spec%%:*}; dir=${spec#*:}; started=$(date +%s); rc=1
+          # Artifact storage occasionally rejects one row immediately while its siblings work.
+          # Do not let bash -e abort before a reason can reach the commit comment.
+          for attempt in 1 2 3; do
+            if timeout 240 gh run download "${{ github.run_id }}" -n "$name" -D "$dir" > "/tmp/fetch-$name.log" 2>&1; then
+              rc=0; break
+            fi
+            echo "   $name attempt $attempt failed: $(tail -2 "/tmp/fetch-$name.log" | tr '\n' ' ' | cut -c1-160)"
+            [ "$attempt" = 3 ] || sleep $(( attempt * 3 ))
+          done
+          echo "   $name -> rc=$rc in $(( $(date +%s) - started ))s into $dir ($(ls "$dir" 2>/dev/null | tr '\n' ' '))"
+          if [ "$rc" != 0 ]; then echo "::warning::$name did not arrive"; missing=true; fi
+        done
+        echo "on disk: $(du -sh /tmp/apk /tmp/classes 2>/dev/null | tr -s '\n' ' ')"
+        for f in app-debug.apk app-debug-androidTest.apk; do
+          if [ ! -s "/tmp/apk/$f" ]; then
+            echo "::error::/tmp/apk/$f is missing or empty - this row has nothing to install"
+            missing=true
+          fi
+        done
+        echo "fetch_seconds=$(( $(date +%s) - fetch_started ))" >> /tmp/diag.env
+        [ "$missing" = false ]
+
+    - name: Unzip the class files used for coverage
+      # Non-fatal on purpose: a missing coverage input makes the *number* unavailable, not the test run
+      # invalid, and a red row that tested nothing at all is worse than a green row with no percentage.
+      continue-on-error: true
+      shell: bash
+      run: |
+        echo "::notice::[row] step 7: Unzip the class files used for coverage"
+        set +e  # this step reports on the row; the last step decides the verdict
+        if unzip -qo /tmp/classes/e2e-classes.zip -d /tmp && ls /tmp/cls >/dev/null 2>&1; then
+          echo "classes for coverage: $(find /tmp/cls -name '*.class' | wc -l) files"
+        else
+          echo "::warning::the compiled classes did not come out of the artifact; coverage will be unavailable for this row"
+          false
+        fi
+    - name: What this runner actually has (so one run answers every environment question)
+      # Cheap (no network, a few seconds) and complete. The three things this pipeline has been guessing at
+      # for days - which avdmanager/sdkmanager the image really exposes, whether a system-image directory has
+      # any content, and what the row's PATH and permissions look like - are written down once, in the log,
+      # in the artifact and in a one-line notice, rather than being inferred from a boot failure afterwards.
+      shell: bash
+      run: |
+        echo "::notice::[row] step 8: What this runner actually has (so one run answers every envi"
+        set +e  # this step reports on the row; the last step decides the verdict
+        SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+        {
+          echo "== PATH tools"; for c in adb emulator avdmanager sdkmanager java unzip timeout; do printf '%-11s %s\n' "$c" "$(command -v "$c" || echo MISSING)"; done
+          echo "== versions"; adb --version 2>&1 | head -1; "$SDK/cmdline-tools/latest/bin/avdmanager" --version 2>&1 | head -1; java -version 2>&1 | head -1
+          echo "== sdk root"; echo "SDK=$SDK writable=$([ -w "$SDK" ] && echo yes || echo no)"; ls "$SDK" 2>&1 | head -14
+          echo "== system images (path : files, build.prop)"; for d in "$SDK"/system-images/*/*/*/*; do [ -d "$d" ] && printf '%s : %s files, build.prop=%s\n' "${d#"$SDK"/system-images/}" "$(ls "$d" 2>/dev/null | wc -l)" "$([ -f "$d/build.prop" ] && echo yes || echo NO)"; done | head -12
+          echo "== kvm"; ls -l /dev/kvm 2>&1; id
+          echo "== machine"; echo "cores=$(nproc) arch=$(uname -m) $(free -m | awk 'NR==2{printf "mem=%sM avail=%sM", $2, $7}')"; df -h / /tmp 2>&1 | tail -2 | tr -s ' '
+          echo "== vmx/svm flags in cpuinfo: $(grep -c -E 'vmx|svm' /proc/cpuinfo 2>/dev/null || echo 0)"
+          echo "== avd home"; echo "ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-unset}"; ls -la "${ANDROID_AVD_HOME:-$HOME/.android/avd}" 2>&1 | head -6
+        } | tee /tmp/env.txt
+        mkdir -p /tmp/e2e-artifacts && cp /tmp/env.txt /tmp/e2e-artifacts/env.txt || true
+        echo "::notice::runner: SDK=$SDK writable=$([ -w "$SDK" ] && echo yes || echo no) images=$(ls -d "$SDK"/system-images/android-*/*/* 2>/dev/null | wc -l) cores=$(nproc) kvm=$(stat -c '%A %U:%G' /dev/kvm 2>/dev/null || echo none)"
+
+    # All device partitions for a given API use the same Google APIs system image
+    # and emulator executable. Cache only boot-verified SDK files, never partial
+    # sdkmanager downloads: parallel cold installs have produced truncated ZIPs.
+    - name: Restore boot-verified emulator and system image
+      id: image_cache
+      uses: actions/cache/restore@v4
+      continue-on-error: true
+      with:
+        path: |
+          /usr/local/lib/android/sdk/emulator
+          /usr/local/lib/android/sdk/system-images/android-${{ inputs.api }}/${{ inputs.img }}/${{ inputs.abi }}
+        key: e2e-sdk-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.api }}-${{ inputs.img }}-${{ inputs.abi }}
+
+    - name: Boot the emulator
+      id: boot
+      if: steps.fetch.outcome == 'success'
+      continue-on-error: true
+      shell: bash
+      run: |
+        echo "::notice::[row] step 9: Boot the emulator"
+        set +e  # this step reports on the row; the last step decides the verdict
+        set -o pipefail
+        started=$(date +%s)
+        set +e
+        # `adb` must resolve for every later step of the row, and this is the one step that knows where the
+        # SDK really is; the boot script also appends it to $GITHUB_PATH, and this export covers the step
+        # that reads the boot log's own verdict.
+        export PATH="${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools:${ANDROID_HOME:-/usr/local/lib/android/sdk}/emulator:$PATH"
+        # Leave the boot room to be slow, but not the whole row: whatever is left after the boot minus the
+        # minutes the tests, the stability pass and the reporting need is the boot budget. A 40-minute
+        # boot-timeout default is how a row spends its life waiting for a device that is never coming.
+        deadline=$(cut -d= -f2 /tmp/deadline 2>/dev/null || echo 0)
+        if [ "$deadline" -gt 0 ]; then
+          left=$(( deadline - $(date +%s) - 1500 ))
+          [ "$left" -lt "${BOOT_TIMEOUT:-1500}" ] && [ "$left" -gt 240 ] && export BOOT_TIMEOUT=$left
+          echo "boot budget capped to ${BOOT_TIMEOUT}s of the row's remaining ${left}s"
+        fi
+        timeout 600 bash tools/ci/emulator_boot.sh 2>&1 | tee /tmp/boot.log
+        rc=${PIPESTATUS[0]}
+        if [ "$rc" = 124 ]; then echo "::error::emulator install/boot exceeded 600s; bounded row reports instead of silently timing out"; fi
+        set -e
+        echo "boot_seconds=$(( $(date +%s) - started ))" >> /tmp/diag.env
+        echo "boot_rc=$rc" >> /tmp/diag.env
+        [ "$rc" = 0 ] || exit "$rc"
+        if [ -n "$WM_SIZE" ]; then
+          echo "== re-shaping the display: $WM_SIZE @ $WM_DENSITY dpi, font_scale $FONT_SCALE"
+          adb shell wm size "$WM_SIZE" && adb shell wm density "$WM_DENSITY"
+          adb shell settings put system font_scale "$FONT_SCALE" || true
+          adb shell wm size; adb shell wm density
+          # The density change restarts the UI; a test that starts during that window sees a dead
+          # accessibility tree, which looks exactly like the app having crashed.
+          adb shell settings put system font_scale "$FONT_SCALE" >/dev/null 2>&1 || true
+          sleep 8
+        fi
+
+    - name: Cache the verified emulator and system image for later runners
+      # One writer per image avoids 23 jobs compressing gigabytes and racing to
+      # populate the same cache key. Other partitions restore it on later runs.
+      if: steps.boot.outcome == 'success' && steps.image_cache.outputs.cache-hit != 'true' && (inputs.row == 'api34-track0' || inputs.row == 'min24-track0')
+      uses: actions/cache/save@v4
+      continue-on-error: true # a same-key save race must not invalidate device tests
+      with:
+        path: |
+          /usr/local/lib/android/sdk/emulator
+          /usr/local/lib/android/sdk/system-images/android-${{ inputs.api }}/${{ inputs.img }}/${{ inputs.abi }}
+        key: e2e-sdk-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.api }}-${{ inputs.img }}-${{ inputs.abi }}
+
+    - name: "Say so, in one sentence, if this runner cannot host an emulator"
+      id: nodev
+      # `continue-on-error` because nothing in this action may fail the job on its own: the step at the end
+      # decides the verdict, after the diagnostics, the artifact and the commit comment have run. A composite
+      # action cannot express that with `if: failure()`, since those functions are not available here.
+      continue-on-error: true
+      if: steps.boot.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::notice::[row] step 10: Say so, in one sentence, if this runner cannot host an emula"
+        set +e  # this step reports on the row; the last step decides the verdict
+        echo "--- emulator_boot.sh said:"
+        tr '\r' '\n' < /tmp/boot.log 2>/dev/null | grep -vE "Unzipping|Downloading|%\]" | tail -30 || echo "(no boot log)"
+        echo "--- adb sees:"; adb devices || true
+        echo "::error::this row never got a device, so the app is untested on it. That is a runner capability, not a product failure - see docs/E2E_FLOWS.md for what a KVM-capable runner changes."
+        exit 1
+    - name: "Install the built APKs (cold: wiped data, so first-run extraction really happens)"
+      if: steps.boot.outcome == 'success'
+      shell: bash
+      run: |
+        echo "::notice::[row] step 11: Install the built APKs (cold: wiped data, so first-run extra"
+        set +e  # this step reports on the row; the last step decides the verdict
+        adb root >/dev/null 2>&1 || true
+        if [ "$VARIANT" = release ]; then apk=/tmp/apk/app-release.apk; else apk=/tmp/apk/app-debug.apk; fi
+        echo "installing $apk"
+        adb install -r -g "$apk"
+        adb install -r "/tmp/apk/app-debug-androidTest.apk"
+        # `adb install` can return before PackageManager exposes the test runner
+        # on a just-booted emulator. One hosted row reached INSTRUMENTATION_FAILED
+        # in every pass while its siblings ran the SAME APK. Verify the component
+        # before accepting an install as ready; retry installation once, fail loudly
+        # if the emulator still cannot register it. Never treat an unrun test as green.
+        runner="$APP_ID.test/androidx.test.runner.AndroidJUnitRunner"
+        if ! adb shell pm list instrumentation | grep -Fq "$runner"; then
+          echo "::warning::test runner not registered after install; reinstalling once"
+          sleep 4
+          adb install -r -g "$apk"
+          adb install -r "/tmp/apk/app-debug-androidTest.apk"
+          if ! adb shell pm list instrumentation | grep -Fq "$runner"; then
+            echo "::error::test instrumentation absent after reinstall: $runner"
+            exit 1
+          fi
+        fi
+        # The permission row of the matrix: granted means `pm grant`, denied means an explicit revoke so
+        # the app is not merely missing a permission it never asked for.
+        case "$LOCATION" in
+          granted) adb shell pm grant "$APP_ID" android.permission.ACCESS_COARSE_LOCATION ;;
+          denied) adb shell pm revoke "$APP_ID" android.permission.ACCESS_COARSE_LOCATION || true ;;
+        esac
+        # A few otherwise healthy emulators accept am instrument while their
+        # launcher is still unresponsive: every test's startActivity then waits
+        # 40-120s for a MainActivity that never shows (no app crash in logcat).
+        # Start the installed DEBUG APK once through adb before UiAutomator takes
+        # over. The cold/settings row calls pm clear AFTER this preflight, so its
+        # genuine first-run extraction assertion is unchanged. Release smoke still
+        # launches its shrunk APK directly for the first time in its own test.
+        if [ "$VARIANT" = debug ]; then
+          if ! timeout 35 adb shell am start -W -n "$APP_ID/.ui.MainActivity"; then
+            echo "::warning::preflight MainActivity did not open; instrumented flows will verify this again"
+          fi
+        fi
+      continue-on-error: true  # reporting must survive a red step; the verdict step decides
+    - name: Run the flow suite (and, for the rows that ask for it, again with the radio off)
+      id: suite
+      env:
+        GROUP: ${{ inputs.group }}
+      continue-on-error: true
+      if: steps.boot.outcome == 'success'
+      shell: bash
+      run: |
+        echo "::notice::[row] step 12: Run the flow suite (and, for the rows that ask for it, again"
+        set +e  # this step reports on the row; the last step decides the verdict
+        set -o pipefail
+        release_flag=false; [ "$VARIANT" = release ] && release_flag=true
+        : > /tmp/pass-times.txt; touch /tmp/diag.env
+        run_suite() {
+          local label=$1
+          echo "=== $label ==="
+          # Never start a pass the row cannot afford to report. `left` is the seconds to the row deadline;
+          # below two minutes the pass is declared skipped (a word the roll-up reads as not-green, so a
+          # budget that was too small is visible as a gap and not as a pass).
+          local deadline left rt
+          deadline=$(cut -d= -f2 /tmp/deadline 2>/dev/null || echo 0)
+          left=$(( deadline - $(date +%s) ))
+          if [ "$deadline" -gt 0 ] && [ "$left" -lt 120 ]; then
+            echo "$label=skipped (row budget: ${left}s left, a pass needs two minutes to run and report)" >> /tmp/tests.txt
+            echo "::warning::$label not started - the row's own budget was spent before it. Raise ROW_BUDGET_MINUTES or use focus: to narrow the suite."
+            return 0
+          fi
+          rt=${RUN_TIMEOUT:-300}
+          if [ "$deadline" -gt 0 ] && [ $(( left - 90 )) -lt "$rt" ]; then rt=$(( left - 90 )); fi
+          [ "$rt" -lt 120 ] && rt=120
+          RUN_TIMEOUT=$rt
+          adb logcat -c || true
+          # The `shell` user creating an Android/data directory can leave it unwritable by the
+          # instrumented app. Use the app's private filesDir instead; `run-as` gives it app UID
+          # ownership, and `exec-out` below pulls the binary bytes without a text shell/CRLF.
+          local ec="/data/user/0/$APP_ID/files/cover-$label.ec"
+          local cover_args=()
+          if [ "$VARIANT" = debug ]; then
+            adb shell run-as "$APP_ID" mkdir -p files || echo "::warning::$label could not create app-owned coverage directory"
+            adb shell run-as "$APP_ID" rm -f "files/cover-$label.ec" || true
+            cover_args=(-e coverage true -e coverageFile "$ec")
+          fi
+          local sel=()
+          # An empty `-e class` value is an error from the runner, not a request to run everything, so the
+          # flag is added only when a filter was actually asked for.
+          [ -n "${CLASS_FILTER:-}" ] && sel=(-e class "$CLASS_FILTER")
+          # Word-splitting here is deliberate: the variable holds a flag triple such as
+          # `-e requireCleared true`, and every caller of it is in this file.
+          [ -n "${EXTRA_ARGS:-}" ] && sel+=($EXTRA_ARGS)
+          # `coverage true` flushes JaCoCo only in the debuggable, instrumented build;
+          # the release-smoke artifact has no testCoverageEnabled agent.
+          # A per-pass wall clock, because the failure mode that costs a whole row is one wedged class: the
+          # runner waits out its own budget and the row reports nothing at all. Bounded here, the pass that
+          # exceeds it is reported as what it is and the remaining classes still run.
+          local started rc; started=$(date +%s)
+          # `set +e` because the step itself runs under `bash -e` and a red instrument is an expected
+          # outcome, not a reason to stop the harness: without this the first failing class would end the
+          # row and the remaining classes would never run.
+          set +e
+          # One line a minute: elapsed, how much the instrumentation runner has printed, and which window
+          # owns the screen. A pass that is working through 46 flows and a pass wedged behind a dialog look
+          # identical from outside; this is what makes a slow row diagnosable while it is still running, and
+          # not only after the budget expires.
+          ( while :; do
+              sleep 60
+              printf '[%s] %s +%ss runner_lines=%s focus=%s\n' "$(date +%T)" "$label" \
+                "$(( $(date +%s) - started ))" \
+                "$(wc -l < "/tmp/instrument-$label.log" 2>/dev/null || echo 0)" \
+                "$(adb shell dumpsys window 2>/dev/null | grep -m1 -oE 'mCurrentFocus=[^ ]+' | tr -d '\r')" \
+                | tee -a /tmp/heartbeat.txt
+            done ) & HB=$!
+          timeout "$RUN_TIMEOUT" adb shell am instrument -w -e debug false \
+            "${cover_args[@]}" \
+            -e release "$release_flag" -e offline "${OFFLINE_FLAG:-false}" \
+            "${sel[@]}" \
+            "$TEST_ID/androidx.test.runner.AndroidJUnitRunner" 2>&1 | tee "/tmp/instrument-$label.log"
+          local rc=${PIPESTATUS[0]}
+          if [ "$rc" = 0 ] &&
+             grep -q 'shortMsg=Process crashed' "/tmp/instrument-$label.log" &&
+             ! grep -Eq 'Tests run: [1-9][0-9]*|OK \([1-9][0-9]* tests?\)' "/tmp/instrument-$label.log"; then
+            # Some hosted images kill the instrumentation process mid-class,
+            # report rc=0 and leave no Java crash buffer (seen in both network
+            # and tracking groups). Never count that as a pass; restart once, preserving
+            # both raw outputs. A second silent exit still fails the row.
+            echo "::warning::$label instrumentation exited without a summary; retrying once"
+            mv "/tmp/instrument-$label.log" "/tmp/instrument-$label-first.log"
+            adb shell run-as "$APP_ID" rm -f "files/cover-$label.ec" || true
+            timeout "$RUN_TIMEOUT" adb shell am instrument -w -e debug false \
+              "${cover_args[@]}" -e release "$release_flag" \
+              -e offline "${OFFLINE_FLAG:-false}" "${sel[@]}" \
+              "$TEST_ID/androidx.test.runner.AndroidJUnitRunner" 2>&1 | tee "/tmp/instrument-$label.log"
+            rc=${PIPESTATUS[0]}
+          fi
+          if [ "$label" = cold ] &&
+             ! grep -Eq 'Tests run: [1-9][0-9]*|OK \([1-9][0-9]* tests?\)' "/tmp/instrument-$label.log" &&
+             { { [ "$rc" = 124 ] && [ ! -s "/tmp/instrument-$label.log" ]; } ||
+               grep -Eq 'shortMsg=failed to attach|longMsg=.*failed to attach' "/tmp/instrument-$label.log"; }; then
+            # A hosted emulator can hang before AndroidJUnitRunner connects to
+            # UiAutomation (zero output), or Android may report 'failed to attach'
+            # with exit code zero. Neither executed a test. Preserve the first
+            # attempt, clear app data AGAIN, and require a real strict cold-start
+            # summary from one more bounded instrumentation pass. An assertion
+            # or a runner that emitted test output never receives this retry.
+            echo "::warning::cold runner did not attach; resetting the test process and retrying a genuinely cleared install once"
+            mv "/tmp/instrument-$label.log" "/tmp/instrument-$label-first.log"
+            adb shell pm clear "$APP_ID" || true
+            # pm clear can return while the direct-launch process is still
+            # exiting. A fresh instrumentation must not attach to that corpse.
+            for n in 1 2 3 4 5; do
+              adb shell pidof "$APP_ID" >/dev/null 2>&1 || break
+              sleep 1
+            done
+            case "$LOCATION" in
+              granted) adb shell pm grant "$APP_ID" android.permission.ACCESS_COARSE_LOCATION || true ;;
+              *) adb shell pm revoke "$APP_ID" android.permission.ACCESS_COARSE_LOCATION || true ;;
+            esac
+            adb shell run-as "$APP_ID" mkdir -p files || true
+            timeout "$RUN_TIMEOUT" adb shell am instrument -w -e debug false \
+              "${cover_args[@]}" -e release "$release_flag" \
+              -e offline "${OFFLINE_FLAG:-false}" "${sel[@]}" \
+              "$TEST_ID/androidx.test.runner.AndroidJUnitRunner" 2>&1 | tee "/tmp/instrument-$label.log"
+            rc=${PIPESTATUS[0]}
+          fi
+          kill "$HB" 2>/dev/null || true
+          set -e
+          local secs=$(( $(date +%s) - started ))
+          echo "$label rc=$rc ${secs}s $(grep -o 'Tests run: [^,]*, *Failures: [0-9]*[^)]*' "/tmp/instrument-$label.log" | tail -1)" >> /tmp/pass-times.txt
+          echo "- \`$label\`: rc=$rc in ${secs}s — $(grep -o 'Tests run: .*' "/tmp/instrument-$label.log" | tail -1)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$VARIANT" = debug ]; then
+            if ! adb exec-out run-as "$APP_ID" cat "files/cover-$label.ec" > "/tmp/cover-$label.ec" 2>/tmp/cover-error.txt ||
+               [ ! -s "/tmp/cover-$label.ec" ]; then
+              rm -f "/tmp/cover-$label.ec"  # never merge an empty/partial JaCoCo file
+              echo "::warning::$label coverage unavailable (app-owned path): $(cat /tmp/cover-error.txt | tr '\r\n' '  ' | cut -c1-180)"
+            fi
+          fi
+          grep -E "^Tests run|FAILURES|INSTRUMENTATION_RESULT|Error:" "/tmp/instrument-$label.log" | tail -20 || true
+          if [ "$rc" = 124 ]; then
+            echo "$label=failed (instrument exceeded ${RUN_TIMEOUT}s; the device may have wedged - see the logcat tail in the artifact)" >> /tmp/tests.txt
+          elif grep -qE "FAILURES!!!|Tests run: [0-9]+,  Failures: [1-9]|INSTRUMENTATION_FAILED|Exception" \
+               "/tmp/instrument-$label.log"; then
+            echo "$label=failed" >> /tmp/tests.txt
+          elif ! grep -Eq 'Tests run: [1-9][0-9]*|OK \([1-9][0-9]* tests?\)' "/tmp/instrument-$label.log"; then
+            # AndroidJUnitRunner prints `OK (N tests)` on a green class; `Tests run: N, Failures: M`
+            # is its failure summary. Accept neither a missing summary nor `OK (0 tests)` as execution.
+            echo "$label=failed (no test summary in the runner output)" >> /tmp/tests.txt
+          else
+            echo "$label=passed" >> /tmp/tests.txt
+          fi
+          # GitHub's log/artifact links redirect to blocked blob hosts for some reviewers. A bounded
+          # annotation on the check itself MUST carry the first failure and device state; 0/9 without
+          # these lines cost two runs and could not distinguish a hung harness from an app regression.
+          if tail -1 /tmp/tests.txt | grep -q 'failed'; then
+            first=$(grep -m1 -E 'AssertionError|StaleObjectException|INSTRUMENTATION_FAILED|^Error:|^Process crashed' "/tmp/instrument-$label.log" | tr '\r\n' '  ' | cut -c1-180 || true)
+            failures=$(grep -E '^[0-9]+\) |AssertionError: |StaleObjectException' "/tmp/instrument-$label.log" | head -14 | tr '\r\n' '  ' | cut -c1-700 || true)
+            tailmsg=$(tail -c 500 "/tmp/instrument-$label.log" | tr '\r\n' '  ' | cut -c1-180 || true)
+            crashes=$(adb shell logcat -d -b crash -v brief 2>/dev/null | tail -c 450 | tr '\r\n' '  ' | cut -c1-180 || true)
+            echo "::error::$label rc=$rc ${secs}s lines=$(wc -l < "/tmp/instrument-$label.log") first=${first:-none} failures=${failures:-none} tail=${tailmsg:-none} crash=${crashes:-none}"
+            # A silent runner used to exit this step before the annotation (grep -m1 under
+            # bash -e/pipefail). Put its actual output in the commit comment as well: artifact
+            # downloads can redirect to storage hosts unavailable to reviewers.
+            if ! grep -Eq 'Tests run: [1-9][0-9]*|OK \([1-9][0-9]* tests?\)' "/tmp/instrument-$label.log"; then
+              printf '%s\n' "--- $label runner output ---" >> /tmp/runner-failures.txt
+              head -60 "/tmp/instrument-$label.log" >> /tmp/runner-failures.txt
+            fi
+          fi
+        }
+        # The cold-start flow is given its own pass rather than being left to the scheduler: inside the
+        # `all` pass it only tests a cold start if AndroidJUnitRunner happens to run ColdStartFlowTest
+        # first, and a coin toss is not evidence. `pm clear` here means the app has genuinely never seen
+        # the 14 MB timetable, and `-e requireCleared true` makes the test fail if that promise is broken.
+        if [ "$VARIANT" = debug ] && { [ -z "$GROUP" ] || [ "$GROUP" = settings ] || [ "$GROUP" = settings-ui ]; }; then
+          adb shell pm clear "$APP_ID" || true
+          for n in 1 2 3 4 5; do
+            adb shell pidof "$APP_ID" >/dev/null 2>&1 || break
+            sleep 1
+          done
+          case "$LOCATION" in
+            granted) adb shell pm grant "$APP_ID" android.permission.ACCESS_COARSE_LOCATION || true ;;
+            *) adb shell pm revoke "$APP_ID" android.permission.ACCESS_COARSE_LOCATION || true ;;
+          esac
+          CLASS_FILTER="in.opentrack.india.e2e.ColdStartFlowTest" \
+            EXTRA_ARGS="-e requireCleared true" RUN_TIMEOUT=210 run_suite cold || true
+        fi
+        # Order matters for the rest: the live-feed field test needs the network, so it runs before the
+        # radio goes off, and the degradation suite runs with it off. Each pass writes its own coverage
+        # file, and the merge below makes the number the suite's coverage rather than one pass of it.
+        if [ "$OFFLINE" = true ] && { [ -z "$GROUP" ] || [ "$GROUP" = settings ] || [ "$GROUP" = settings-net ]; }; then
+          CLASS_FILTER="in.opentrack.india.realdevice.LiveFeedFieldTest" run_suite online
+        fi
+        if [ -n "$GROUP" ]; then
+          # The three tracking shards run independent methods of the SAME class on separate
+          # emulators. AndroidJUnitRunner partitions the discovered methods; there is no
+          # hand-maintained list that can silently omit a newly added regression.
+          case "$GROUP" in
+            station0|station1|station2)
+              idx=${GROUP#station}
+              CLASS_FILTER="in.opentrack.india.e2e.StationSearchFlowTest" \
+                EXTRA_ARGS="-e numShards 3 -e shardIndex $idx" RUN_TIMEOUT=240 run_suite "$GROUP" ;;
+            train) CLASS_FILTER="in.opentrack.india.e2e.TrainSearchFlowTest" run_suite train ;;
+            track0|track1|track2|track3)
+              idx=${GROUP#track}
+              # Track3 includes the real one-minute Auto path and the refresh/
+              # expand flow. API 34 offline/granted also reached 300s on CI; keep
+              # every assertion and allow the same bounded limit on all devices.
+              track_timeout=300
+              if [ "$idx" = 3 ]; then track_timeout=420; fi
+              CLASS_FILTER="in.opentrack.india.e2e.TrackingFlowTest" \
+                EXTRA_ARGS="-e numShards 4 -e shardIndex $idx" RUN_TIMEOUT="$track_timeout" run_suite "$GROUP"
+              # Assert the new packaged offline corpus + actual rail disclosure on a
+              # device, independently of whether NTES answers this emulator today.
+              if [ "$idx" = 0 ]; then
+                CLASS_FILTER="in.opentrack.india.e2e.CorridorMapDeviceTest" \
+                  RUN_TIMEOUT=120 run_suite corridor-map
+              fi ;;
+            settings-ui)
+              CLASS_FILTER="in.opentrack.india.e2e.SettingsFlowTest" run_suite settings
+              CLASS_FILTER="in.opentrack.india.e2e.ColdStartFlowTest" run_suite warm ;;
+            settings)
+              CLASS_FILTER="in.opentrack.india.e2e.SettingsFlowTest" run_suite settings
+              CLASS_FILTER="in.opentrack.india.e2e.DegradationFlowTest" run_suite degradation
+              CLASS_FILTER="in.opentrack.india.e2e.ColdStartFlowTest" run_suite warm
+              if [ "$OFFLINE" = true ]; then
+                adb shell svc wifi disable; adb shell svc data disable; sleep 3
+                OFFLINE_FLAG=true CLASS_FILTER="in.opentrack.india.e2e.DegradationFlowTest" run_suite offline
+                adb shell svc wifi enable; adb shell svc data enable; sleep 2
+              fi ;;
+            settings-net)
+              CLASS_FILTER="in.opentrack.india.e2e.DegradationFlowTest" run_suite degradation
+              if [ "$OFFLINE" = true ]; then
+                adb shell svc wifi disable; adb shell svc data disable; sleep 3
+                OFFLINE_FLAG=true CLASS_FILTER="in.opentrack.india.e2e.DegradationFlowTest" run_suite offline
+                adb shell svc wifi enable; adb shell svc data enable; sleep 2
+              fi ;;
+            release) CLASS_FILTER="in.opentrack.india.e2e.ReleaseSmokeFlowTest" run_suite release ;;
+            *) echo "::error::unknown E2E group: $GROUP"; echo "group=failed" >> /tmp/tests.txt ;;
+          esac
+        else
+        # One `am instrument` per class, not one for the package. Two reasons, both about information: a
+        # wedged class then costs only its own budget instead of the row's, and the record says which class
+        # and how long - which is what tells you whether a flow needs a device at all.
+        for cls in StationSearchFlowTest TrainSearchFlowTest TrackingFlowTest CorridorMapDeviceTest \
+                   SettingsFlowTest DegradationFlowTest ReleaseSmokeFlowTest; do
+          case "$cls" in
+            ReleaseSmokeFlowTest) [ "$VARIANT" = release ] || continue ;;
+            *) [ "$VARIANT" = release ] && continue ;;
+          esac
+          [ -n "$FOCUS" ] && [ "$FOCUS" != "$cls" ] && continue
+          # This class drives 18 independent, cold-launched tracking flows and several
+          # network-backed source checks. It takes ~270s at 440 dpi even when green;
+          # after the large-font scroll assertions were made honest, 300s truncated it.
+          if [ "$cls" = TrackingFlowTest ]; then
+            CLASS_FILTER="in.opentrack.india.e2e.$cls" RUN_TIMEOUT=480 run_suite "$cls"
+          else
+            CLASS_FILTER="in.opentrack.india.e2e.$cls" run_suite "$cls"
+          fi
+        done
+        [ -n "$FOCUS" ] || CLASS_FILTER="in.opentrack.india.e2e.ColdStartFlowTest" run_suite ColdStartFlowTest
+        if [ "$OFFLINE" = true ]; then
+          adb shell svc wifi disable; adb shell svc data disable; sleep 3
+          OFFLINE_FLAG=true CLASS_FILTER="in.opentrack.india.e2e.DegradationFlowTest" run_suite offline
+          adb shell svc wifi enable; adb shell svc data enable; sleep 2
+        fi
+        fi # GROUP or legacy whole-suite row
+        if [ -s /tmp/tests.txt ] && grep -Eq '=(failed|skipped|not-run)' /tmp/tests.txt; then
+          echo "::error::at least one instrumented pass failed or was skipped ($(tr '\n' ' ' < /tmp/tests.txt))"
+          for f in /tmp/instrument-*.log; do echo "--- $f"; grep -B2 -A 28 "^in\.opentrack\|Failure\|expected:" "$f" | head -80; done
+          exit 1
+        fi
+    - name: Coverage of the app, from the device runs
+      id: cov
+      continue-on-error: true
+      if: steps.boot.outcome == 'success'
+      shell: bash
+      run: |
+        echo "::notice::[row] step 13: Coverage of the app, from the device runs"
+        set +e  # this step reports on the row; the last step decides the verdict
+        set -o pipefail
+        # Merge the per-pass .ec files so the number is the suite's coverage, not one pass of it.
+        mkdir -p /tmp/ec && cp /tmp/cover-*.ec /tmp/ec/ 2>/dev/null || true
+        merged=$(ls /tmp/ec/*.ec 2>/dev/null | head -1)
+        if [ -z "$merged" ]; then
+          echo "::warning::no coverage file came off the device"
+          echo "coverage=none" >> /tmp/status.txt
+          exit 0
+        fi
+        if [ "$(ls /tmp/ec/*.ec | wc -l)" -gt 1 ]; then
+          JAR=/tmp/jacoco/org.jacoco.cli-0.8.12-nodeps.jar
+          [ -f "$JAR" ] || curl -sSfL --create-dirs -o "$JAR" \
+            https://repo1.maven.org/maven2/org/jacoco/org.jacoco.cli/0.8.12/org.jacoco.cli-0.8.12-nodeps.jar
+          java -jar "$JAR" merge $(ls /tmp/ec/*.ec) --destfile /tmp/ec-all.ec && cp /tmp/ec-all.ec "$merged"
+        fi
+        bash tools/ci/jacoco_report.sh "$merged" /tmp/cls app/src/main/java /tmp/cov | tee /tmp/cov.txt
+        cp /tmp/cov/cov.xml /tmp/cov.xml 2>/dev/null || true
+        echo "coverage=$(grep -o 'coverage: [0-9.]*%' /tmp/cov.txt | head -1)" >> /tmp/status.txt
+    - name: Pull the evidence (screenshots and window hierarchies for every assertion path)
+      if: steps.boot.outcome == 'success'
+      shell: bash
+      run: |
+        echo "::notice::[row] step 14: Pull the evidence (screenshots and window hierarchies for ev"
+        set +e  # this step reports on the row; the last step decides the verdict
+        mkdir -p /tmp/evidence
+        adb pull "/sdcard/Android/data/$TEST_ID/files/evidence" /tmp/evidence >/dev/null 2>&1 || true
+        adb exec-out "logcat -d -v brief" > /tmp/logcat.txt 2>&1 || true
+        adb shell dumpsys dropbox --print > /tmp/dropbox.txt 2>&1 || true
+        ls -la /tmp/evidence/evidence 2>/dev/null | head -5 || echo "no screenshots pulled"
+      continue-on-error: true  # reporting must survive a red step; the verdict step decides
+    - name: Random-event stability pass on the same image
+      id: monkey
+      continue-on-error: true
+      if: steps.boot.outcome == 'success'
+      shell: bash
+      run: |
+        echo "::notice::[row] step 15: Random-event stability pass on the same image"
+        set +e  # this step reports on the row; the last step decides the verdict
+        started=$(date +%s)
+        COUNT="$MONKEY" bash tools/ci/monkey_stability.sh 2>&1 | tail -40
+        echo "monkey_seconds=$(( $(date +%s) - started ))" >> /tmp/diag.env
+        cp /tmp/monkey-summary.txt /tmp/out-monkey.txt 2>/dev/null || true
+        tail -3 /tmp/monkey-summary.txt >> "$GITHUB_STEP_SUMMARY" || true
+    - name: Diagnostics - what the device and the runner looked like
+      shell: bash
+      run: |
+        echo "::notice::[row] step 16: Diagnostics - what the device and the runner looked like"
+        set +e  # this step reports on the row; the last step decides the verdict
+        # Everything here exists so a row can be judged from one screen instead of four: how long the boot
+        # took, what the emulator reported, whether the runner was starved, whether the app was ever
+        # alive, and how long each class took. A red row without numbers invites guessing.
+        {
+          echo "### diagnostics/$ROW"
+          echo '```'
+          echo "boot: $(tr '\n' ' ' < /tmp/diag.env 2>/dev/null || echo none)"
+          echo "device: $(adb devices | tail -n +2 | tr -d '\r' | head -1 || echo none)"
+          echo "android: $(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' || echo ?) abi=$(adb shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r' || echo ?)"
+          echo "display: $(adb shell wm size 2>/dev/null | tr -d '\r' || echo ?) $(adb shell wm density 2>/dev/null | tr -d '\r' || echo ?) font=$(adb shell settings get system font_scale 2>/dev/null | tr -d '\r' || echo ?)"
+          echo "app pid: $(adb shell pidof "$APP_ID" 2>/dev/null | tr -d '\r' || echo 'not running')"
+          echo "passes:"; sed 's/^/  /' /tmp/pass-times.txt 2>/dev/null || echo "  (none)"
+          echo "runner: $(df -h "$GITHUB_WORKSPACE" | tail -1 | tr -s ' ') / $(free -m | awk 'NR==2{print $3" MB used of "$2" MB"}')"
+          echo "crash buffer: $(adb shell logcat -d -b crash -v brief 2>/dev/null | grep -c 'E AndroidRuntime' || echo 0) entries"
+          echo '```'
+        } | tee /tmp/diag.md
+        cat /tmp/diag.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+        cp /tmp/diag.md /tmp/out/diag.md 2>/dev/null || true
+      continue-on-error: true  # reporting must survive a red step; the verdict step decides
+    - name: Record what this row actually achieved
+      shell: bash
+      run: |
+        echo "::notice::[row] step 17: Record what this row actually achieved"
+        set +e  # this step reports on the row; the last step decides the verdict
+        {
+          echo "row=$ROW"
+          echo "desc=$ROW_DESC"
+          # Distinguish warm-cache validation from a cold SDK download when
+          # comparing the five-minute workflow target across runs.
+          echo "sdk_cache_hit=${{ steps.image_cache.outputs.cache-hit }}"
+          if [ "${{ steps.boot.outcome }}" = success ]; then
+            echo "boot=ok $(grep -o 'boot_seconds=[0-9]*' /tmp/diag.env 2>/dev/null | cut -d= -f2)s"
+          else
+            # The row's reason, in the status line, so the roll-up table says "the emulator exited at 0s
+            # (CPU Architecture arm)" rather than "see the log above" - the log is not readable from where a
+            # red run gets diagnosed, which is the entire lesson of the last six rows.
+            why=$(tr '\r' '\n' < /tmp/boot.log 2>/dev/null | grep -m1 '::error::' | cut -c10- | cut -c1-160)
+            echo "boot=failed: ${why:-no ::error:: line in the boot log, rc=$(grep -o 'boot_rc=[0-9]*' /tmp/diag.env 2>/dev/null | cut -d= -f2)}"
+          fi
+          echo "display=$(adb shell wm size 2>/dev/null | tr -d '\r' || echo none) / $(adb shell wm density 2>/dev/null | tr -d '\r' || echo none) / font=$(adb shell settings get system font_scale 2>/dev/null | tr -d '\r' || echo none)"
+          echo "variant_row=$VARIANT location=$LOCATION offline=$OFFLINE monkey=$MONKEY focus=${FOCUS:-none} group=${{ inputs.group }}"
+          echo "variant=$VARIANT"
+          cat /tmp/tests.txt 2>/dev/null || echo "tests=not-run"
+          cat /tmp/status.txt 2>/dev/null || true
+        } | tee "/tmp/e2e-status-$ROW.txt"
+        mkdir -p /tmp/out && cp "/tmp/e2e-status-$ROW.txt" /tmp/out/status.txt
+        cp /tmp/cov.xml /tmp/out/cov.xml 2>/dev/null || true
+        mkdir -p /tmp/out/ec
+        cp /tmp/cover-*.ec /tmp/out/ec/ 2>/dev/null || true
+        cp /tmp/cov.txt /tmp/out/coverage-summary.txt 2>/dev/null || true
+        # Everything a reader needs to explain *why*, without access to the runner afterwards: the raw
+        # per-pass instrument output, the boot log, the crash scan. This is also what makes a red row
+        # legible to someone who cannot open the Actions UI logs, so keep it in the artifact.
+        cp /tmp/heartbeat.txt /tmp/out/ 2>/dev/null || true
+        cp /tmp/env.txt /tmp/out/runner-env.txt 2>/dev/null || true
+        cp /tmp/avd.log /tmp/out/avd.log 2>/dev/null || true
+        cp /tmp/instrument-*.log /tmp/out/ 2>/dev/null || true
+        cp /tmp/boot.log /tmp/out/boot.log 2>/dev/null || true
+        cp /tmp/logcat.txt /tmp/out/dropbox.txt /tmp/monkey-summary.txt /tmp/out/ 2>/dev/null || true
+        for f in /tmp/cov/html/*.html; do cp "$f" /tmp/out/ 2>/dev/null || true; done
+        (cd /tmp/evidence/evidence 2>/dev/null && tar czf /tmp/out/screenshots.tgz .) || true
+      continue-on-error: true  # reporting must survive a red step; the verdict step decides
+    - uses: actions/upload-artifact@v4
+      # No `if: always()` here: the steps above never fail the job (they carry continue-on-error and are
+      # judged at the end), so this runs on the happy path and the sad one alike.
+      with:
+        name: e2e-result-${{ inputs.row }}
+        path: /tmp/out
+        retention-days: 3
+        if-no-files-found: warn
+      continue-on-error: true  # reporting must survive a red step; the verdict step decides
+    - name: Report the row on the commit (a green row says what it proved too)
+      # A green row has to state what it proved, or the run is unreadable to anyone who did not write it;
+      # a red one has to carry its own evidence, because the Actions log is not reachable from a terminal.
+      # Both are bounded to a couple of kB, so a comment can never be swallowed by a progress bar.
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      shell: bash
+      run: |
+        echo "::notice::[row] step 19: Report the row on the commit (a green row says what it prove"
+        set +e  # this step reports on the row; the last step decides the verdict
+        # Every test here is an `if`, not `cmd && var=x`: Actions runs `bash -e`, and a short-circuit that
+        # ends false aborts the step - which is why no row comment was ever posted, on any run, while the
+        # report job's comment arrived. `grep -q` finding nothing returns 1, and the assignment after `&&`
+        # never ran, so the step died before reaching `gh api` and the failure looked like a permission.
+        verdict=PASS
+        if grep -Eq '=(failed|skipped|not-run)' /tmp/tests.txt 2>/dev/null; then verdict=FAIL; fi
+        if [ "${{ steps.boot.outcome }}" != success ]; then verdict="NO DEVICE"; fi
+        if [ "${{ steps.fetch.outcome }}" != success ]; then verdict="NO ARTIFACT"; fi
+        {
+          echo "### e2e/$ROW — $verdict"
+          echo ""
+          echo "\`$ROW\` status: \`$(cat /tmp/e2e-status-$ROW.txt 2>/dev/null | tr '\n' ' ' || echo none)\`"
+          echo ""
+          echo '```'
+          sed 's/^/  /' /tmp/pass-times.txt 2>/dev/null || echo "  (no instrument pass ran)"
+          grep -o 'coverage: [0-9.]*%' /tmp/cov.txt 2>/dev/null | head -1 || true
+          tail -2 /tmp/out-monkey.txt 2>/dev/null || true
+          echo '```'
+          echo ""
+          echo 'runner facts, and how each avdmanager invocation form was answered:'
+          echo '```'
+          grep -E "^== |MISSING|writable=|cores=" /tmp/env.txt 2>/dev/null | head -12 || echo "  (no probe output)"
+          grep -E "^   try " /tmp/avd.log 2>/dev/null | tail -4 || echo "  (no avdmanager attempts logged)"
+          echo '```'
+          echo "heartbeat (one line per minute of every pass):"
+          echo '```'
+          tail -10 /tmp/heartbeat.txt 2>/dev/null || echo "  (no heartbeat)"
+          echo '```'
+          echo "artifact fetch diagnostics (each name was retried up to three times):"
+          echo '```'
+          for f in /tmp/fetch-*.log; do
+            [ -f "$f" ] && { echo "-- ${f##*/}"; tail -3 "$f" | cut -c1-240; }
+          done
+          echo '```'
+          echo "boot log (sanitised) and the tail of the failing instrument pass:"
+          echo '```'
+          tr '\r' '\n' < /tmp/boot.log 2>/dev/null | grep -vE "Unzipping|Downloading|Loading |Fetch remote|Computing updates" | tail -22 || true
+          if [ -s /tmp/runner-failures.txt ]; then
+            head -65 /tmp/runner-failures.txt
+          else
+            for f in /tmp/instrument-*.log; do
+              grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Exception|^Error:' "$f" || continue
+              echo "--- ${f##*/}"; tail -35 "$f"
+            done
+          fi
+          echo '```'
+          echo 'logcat tail:'
+          echo '```'
+          grep -E "FATAL|ANR |E AndroidRuntime" /tmp/logcat.txt 2>/dev/null | tail -25 || echo "(none)"
+          echo '```'
+          if [ "$verdict" = FAIL ]; then
+            # The grep above keeps only the FATAL header and hid the Java cause.
+            # Artifact URLs redirect to a blob host some reviewers cannot access:
+            # print the *whole first crash frame* into this small GitHub comment.
+            echo 'first crash stack (Android crash buffer):'
+            echo '```'
+            adb shell logcat -d -b crash -v brief 2>/dev/null | tr -d '\r' | \
+              sed -n '/FATAL EXCEPTION/,+32p' | head -38 || true
+            echo '```'
+          fi
+        } > /tmp/body.md
+        err=$(gh api -X POST "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -f body="$(cat /tmp/body.md)" 2>&1 >/dev/null) \
+          || echo "::error::could not post the row comment ($ROW): $(printf '%s' "$err" | tr '\n' ' ' | cut -c1-200)"
+
+    # The row's result, decided last so everything that explains it has already been written.
+    # `steps.x.outcome` is the real outcome even when `continue-on-error` turned the *conclusion* green, which
+    # is the only way to get "report, then fail" inside a composite action - its step conditions may not call
+    # failure() or always().
+      continue-on-error: true  # reporting must survive a red step; the verdict step decides
+    - name: Let the row decide its own verdict
+      if: steps.fetch.outcome == 'failure' || steps.boot.outcome == 'failure' || steps.nodev.outcome == 'failure' || steps.suite.outcome == 'failure' || steps.cov.outcome == 'failure' || steps.monkey.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::notice::[row] step 20: Let the row decide its own verdict"
+        set +e  # this step reports on the row; the last step decides the verdict
+        echo "::error::$ROW failed - boot, tests, coverage or the stability pass; the comment on this commit says which, and the e2e-result-$ROW artifact holds the logs and screenshots"
+        exit 1

@@ -1,0 +1,1046 @@
+# End-to-end testing of the **built APK**, driven from outside the process on a real emulator image.
+#
+# Why a second workflow: the `android` workflow proves the app compiles, that its rules hold, and that its
+# screens paint. None of that can answer "does the app a person installs work on a phone" — the fixture data
+# is ours, the framework is Robolectric's, and the live feed is never touched. This workflow installs the
+# artifacts CI builds and taps on them.
+#
+# The constraint to read before editing: an emulator needs /dev/kvm, and a runner either has it or does not
+# (`tools/ci/emulator_boot.sh` detects it rather than assuming, and repairs the group permissions when the
+# device exists but is unreadable). An x86 system image will not boot without acceleration at all, so a row
+# on such a runner reports `boot=failed` after three seconds instead of after a twenty-minute timeout. A row that cannot boot reports `boot=failed` and is loud in the
+# summary; it is not allowed to look like a pass. The `report` job fails the run when *no* row booted, with
+# the reason and the fix (a runner with KVM, or a self-hosted one), because a pipeline that quietly does
+# nothing is what this file exists to replace.
+#
+# The "100 % coverage" claim is two gates, not a vibe:
+#   * `plan` — every flow in docs/E2E_FLOWS.md must be claimed by a device test, and every `Class#method`
+#     the table cites must exist. Runs only on a manually requested E2E dispatch.
+#   * `report` — JaCoCo line coverage of the app, measured from the device runs, against a floor.
+name: e2e
+
+# User opt-in only. No push, PR, schedule, workflow_run or commit-message path:
+# a change to app code must NEVER start an E2E run without the user's explicit request.
+# Keep the workflow present and manual; do not dispatch it merely to verify this change.
+on:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Run all device rows (API 24, density and release as well as the API 34 smoke)"
+        type: boolean
+        default: true
+      focus:
+        description: "One device class only, e.g. TrackingFlowTest (empty = whole suite)"
+        type: string
+        default: ""
+      monkey_events:
+        description: "Random events for the stability pass (0 = skip the pass)"
+        type: string
+        default: ""
+      boot_timeout:
+        description: "Seconds to wait for an emulator to boot (the row's own deadline caps this anyway)"
+        type: string
+        default: "1500"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  # Keep distinct SHAs independent so a slow composite cancellation cannot block
+  # the new plan. That plan requests cancellation of obsolete runs via its narrowly
+  # scoped actions:write token, freeing queued device runners for the new head.
+  group: e2e-${{ github.sha }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  APP_ID: in.opentrack.india
+  TEST_ID: in.opentrack.india.test
+
+jobs:
+  # ---------------------------------------------------------------------------- the live-feed reconnaissance
+  # A development sandbox is not allowed to open a socket to the enquiry host, so the runner does the
+  # probing and the answer lands on the commit: which sub-services answer at all, whether our envelope
+  # framing is accepted, and whether the reply carries per-stop actual times. This is the job that turns
+  # "I think NTES publishes running times" into evidence, and it is the reason the app can keep a live
+  # source without anyone having to sniff a packet capture by hand. It never fails the build: its output
+  # is information, and a probe that can break a release is a probe nobody runs twice.
+  probe:
+    # Optional live-source reconnaissance has a separate research workflow;
+    # this legacy job cannot be reached by an E2E manual dispatch without a push event.
+    if: contains(github.event.head_commit.message, '[probe]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 14 # the live-status + route + script ladders for 2 trains need ~9 min (6m0s kills were T21.14)
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Bounded RailGeo and independent-source check
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/probe_route_candidates.py | tee route-trial.txt
+          cat route-trial.txt >> "$GITHUB_STEP_SUMMARY"
+          { echo 'Bounded route trial (not verified actuals):'; echo '```'; cat route-trial.txt; echo '```'; } > route-trial-comment.txt
+          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" -f body="$(cat route-trial-comment.txt)"
+      - name: Capture independent page route and actual-versus-estimate labels
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/probe_confirmtkt_route.py | tee confirmtkt-route-trial.txt
+          { echo 'ConfirmTkt route trial (not verified actuals):'; echo '```'; cat confirmtkt-route-trial.txt; echo '```'; } > confirmtkt-route-comment.txt
+          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" -f body="$(cat confirmtkt-route-comment.txt)"
+      - name: Ask the live feed what it answers today
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # The capture directory is the point of the run: a parser may only be written against a captured
+          # payload (brief 4.5), and the runner is the only machine that can ask. The probe also posts the
+          # raw erail pair body as a commit comment, because artefact storage is unreachable from the
+          # sandbox where the parser is written.
+          PROBE_CAPTURE: ${{ github.workspace }}/probe-capture
+        run: |
+          set +e
+          echo "::notice::[probe] step 1: installing the AES dependency"
+          python3 -m pip install --quiet pycryptodome 2>&1 | tail -2
+          echo "::notice::[probe] step 2: one POST per sub-service, results to the commit"
+          python3 tools/ci/probe_live_feed.py 2>&1 | tail -60
+          rc=$?
+          echo "probe finished with rc=$rc"
+          exit 0
+      - name: Keep the raw bodies (a parser may only be written against a capture - 4.5)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-capture
+          path: probe-capture
+          if-no-files-found: warn
+          retention-days: 7
+  plan:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+      focus: ${{ steps.scope.outputs.focus }}
+      monkey: ${{ steps.scope.outputs.monkey }}
+      boot_timeout: ${{ steps.scope.outputs.boot_timeout }}
+    # Commit comments are how a failure becomes readable without opening the Actions UI, and the default
+    # token cannot post them (a 403 on `contents: read` that `|| echo` turns into silence).
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write # only plan can cancel superseded E2E runs on THIS branch
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reclaim runners from superseded branch sweeps
+        if: github.ref != 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # Best effort: a GitHub token that cannot cancel is NOT a reason to
+          # skip testing. Never cancel a same-SHA focus/dispatch, a newer run
+          # whose plan started first, or another branch. A SHA comparison alone
+          # let the delayed 1618e1e plan cancel the newer c092d1b sweep.
+          set +e
+          ids=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/e2e.yml/runs?branch=$GITHUB_REF_NAME&per_page=100" \
+            --jq ".workflow_runs[] | select(.run_number < $GITHUB_RUN_NUMBER) | select(.head_sha != \"$GITHUB_SHA\") | select(.status == \"queued\" or .status == \"in_progress\" or .status == \"waiting\" or .status == \"pending\") | .id" 2>/tmp/cancel-list-error)
+          if [ $? -ne 0 ]; then
+            echo "::warning::could not list obsolete E2E runs: $(head -c 180 /tmp/cancel-list-error)"
+            exit 0
+          fi
+          for id in $ids; do
+            gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" >/dev/null 2>&1 &&
+              echo "::notice::cancel requested for older branch E2E run $id" ||
+              echo "::warning::could not cancel older E2E run $id"
+          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Decide how much of the device matrix this event deserves
+        id: scope
+        # Dispatch inputs alone control scope. A commit title is not user permission.
+        env:
+          DISPATCH_FULL: ${{ inputs.full }}
+          DISPATCH_FOCUS: ${{ inputs.focus }}
+          DISPATCH_MONKEY: ${{ inputs.monkey_events }}
+          DISPATCH_BOOT: ${{ inputs.boot_timeout }}
+        run: |
+          # Only a manually dispatched run reaches this plan. The full matrix is
+          # the default; the user can explicitly request a narrower focus.
+          full=false
+          [ "$DISPATCH_FULL" = "true" ] && full=true
+          focus="$DISPATCH_FOCUS"
+          monkey="$DISPATCH_MONKEY"
+          boot="$DISPATCH_BOOT"
+          printf 'scope: full=%s focus=%s monkey=%s boot=%s\n' "$full" "${focus:-whole suite}" "${monkey:-default}" "${boot:-default}"
+          {
+            echo "full=$full"
+            echo "focus=$focus"
+            echo "monkey=$monkey"
+            echo "boot_timeout=$boot"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$full" = true ]; then
+            echo "::notice::device rows: all four (api34, min24, density, release); focus=${focus:-whole suite}"
+          else
+            echo "::notice::device rows: core (api34); the dispatch full checkbox enables min24, density and release"
+          fi
+      - name: Flow manifest vs the tests that claim it
+        run: |
+          python3 tools/ci/flow_coverage.py --summary
+          echo "--- the manifest itself ---"
+          sed -n '1,40p' docs/E2E_FLOWS.md
+      - name: Static checks (the same ones the android workflow runs first)
+        run: |
+          # Optional, and only for the checker that reads YAML: a runner's python has no PyYAML, and the
+          # workflow/action schema checks need a parser. The rest are stdlib, and `check_workflows.py`
+          # degrades to its indentation rules rather than failing the gate over a missing package.
+          python3 -m pip install --quiet pyyaml 2>/dev/null || true
+          # The linter is the only check that catches a duplicated mapping key, which is the failure that
+          # costs an entire run rather than one step - so it is checked itself, first, and its verdict on
+          # this repository's files comes after. If these cases fail, nothing below is trustworthy.
+          python3 tools/ci/test_check_workflows.py
+          python3 tools/ci/check_workflows.py
+          python3 tools/ci/check_kotlin_balance.py app/src
+          python3 tools/ci/check_refs.py app/src/main/java
+          python3 tools/ci/check_resources.py
+          python3 tools/ci/check_members.py
+          python3 tools/ci/check_literals.py
+          python3 tools/ci/test_e2e_selectors.py
+          python3 tools/ci/test_e2e_rollup.py
+          python3 tools/ci/test_e2e_matrix.py
+          # The two rules that cost a push each, checked before the runner gets a say:
+          # a key written twice in one mapping block, and an action input with both `required`
+          # and `default`. Both make the whole file invalid - no job starts, no annotation to read.
+          python3 tools/ci/check_workflows.py
+      - name: The boot script must be usable before anything depends on it
+        run: |
+          bash -n tools/ci/emulator_boot.sh tools/ci/monkey_stability.sh tools/ci/jacoco_report.sh
+          python3 -c "import ast,sys; [ast.parse(open(f).read()) for f in ['tools/ci/flow_coverage.py']]"
+      - name: Report on the commit when the gate is red
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### e2e gate failed"
+            echo ""
+            echo "Each checker's own words, so a red \`plan\` job is actionable without opening the UI:"
+            for c in flow_coverage check_kotlin_balance check_refs check_resources check_members check_literals check_workflows; do
+              echo ""
+              echo "#### \`$c\`"
+              echo '```'
+              python3 "tools/ci/$c.py" 2>&1 | tail -18 || echo "(the checker itself could not run)"
+              echo '```'
+            done
+            echo ""
+            echo "#### shell syntax of the harness scripts"
+            echo '```'
+            bash -n tools/ci/emulator_boot.sh tools/ci/monkey_stability.sh tools/ci/jacoco_report.sh 2>&1 | head -10 \
+              || echo "(one of them does not parse)"
+            echo '```'
+          } > /tmp/body.md
+          gh api -X POST "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" \
+            -f body="$(cat /tmp/body.md)" || echo "::warning::could not post the commit comment"
+
+  # Dedicated same-commit source-admission gate. These deterministic contracts
+  # replay the owner's contradictory page and cached/failure variants; they do NOT
+  # assert that a public URL currently supplies live railway observations.
+  source_integrity:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare offline timetable for source-contract tests
+        run: bash tools/ci/prepare_asset.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Source identity, chronology, cache and admission fixtures
+        run: |
+          ./gradlew --no-daemon :app:testDebugUnitTest \
+            --tests 'in.opentrack.india.v2.mirror.OrgWebsiteStatusTest' \
+            --tests 'in.opentrack.india.v2.mirror.PublicPageChecksTest' \
+            --tests 'in.opentrack.india.ui.SourceEvidencePolicyTest' \
+            --tests 'in.opentrack.india.ui.RefreshReceiptTextTest' --stacktrace
+      - name: Record the evidence level (not a claim of live movement)
+        if: always()
+        run: |
+          echo 'Source-integrity fixture verdict: ${{ job.status }} at ${{ github.sha }}' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Real-network device tests report source transport and parsed claims separately; an unreachable provider supplies no verified actuals.' >> "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------------------------------- the artifacts
+  build:
+    needs: plan
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate the offline timetable asset
+        run: bash tools/ci/prepare_asset.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      # App bytecode and APK are built independently of the instrumented APK.
+      - name: Assemble debug APK and coverage classes
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :app:assembleDebug :app:compileDebugKotlin \
+            --stacktrace 2>&1 | tee /tmp/build.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 3
+      # The Actions UI is the only place these logs live for most readers, and a red "build" job with no
+      # message is the least actionable thing CI can produce, so the compiler's own words go on the commit.
+      - name: Put the compile errors on the commit
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### e2e build failed"
+            echo ""
+            echo '```'
+            {
+              grep -E "^e: |^> Task .*FAILED|error: |What went wrong|^Execution failed" /tmp/build.log 2>/dev/null
+              grep -A 6 "What went wrong" /tmp/build.log 2>/dev/null | head -30
+            } | head -80 || tail -60 /tmp/build.log
+            echo '```'
+          } > /tmp/body.md
+          gh api -X POST "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -f body="$(cat /tmp/body.md)" \
+            || echo "::warning::could not post the build failure"
+      # JaCoCo needs the class files to turn a .ec into a report; shipping them costs seconds and keeps the
+      # e2e jobs from running Gradle (and downloading an SDK) just to measure.
+      - name: Package the compiled classes for the coverage report
+        run: |
+          set -e
+          mkdir -p /tmp/cls && cp -r app/build/tmp/kotlin-classes/debug/* /tmp/cls/
+          (cd /tmp && zip -qr "$GITHUB_WORKSPACE/e2e-classes.zip" cls)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-classes
+          path: e2e-classes.zip
+          if-no-files-found: error
+          retention-days: 3
+
+  # Independent compilation: a slow test-APK build no longer serializes the
+  # app APK/coverage build. Both artifacts are required before ANY device row.
+  instrument:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate the packaged timetable asset
+        run: bash tools/ci/prepare_asset.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: Assemble instrumented test APK
+        run: ./gradlew --no-daemon :app:assembleDebugAndroidTest --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-debug-androidTest
+          path: app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 3
+
+  # R8/resource shrink on its own runner. The old serial release pass held ALL
+  # emulators until it finished, even though only one release-smoke row needs it.
+  release_build:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate the offline timetable asset
+        run: bash tools/ci/prepare_asset.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+      - name: Assemble R8 release smoke APK with the public test-only key
+        run: |
+          DBG="$GITHUB_WORKSPACE/tools/ci/test-only-debug.p12"
+          ./gradlew --no-daemon :app:assembleRelease \
+            -Pandroid.injected.signing.store.file="$DBG" \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=androiddebugkey \
+            -Pandroid.injected.signing.key.password=android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-release
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 3
+
+  # ----------------------------------------------------------------------------------- the device matrix
+  #
+  # A manually requested core sweep uses API 34; full dispatches add minSdk 24, density/font scale and the
+  # R8-shrunk APK. `plan` enables this sweep only for a manually dispatched full run.
+  # A core-only result does NOT claim API 24/release coverage; those require a full manual sweep.
+  e2e:
+    needs: [build, instrument, plan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # A job-level `permissions` block replaces the workflow-level one rather than adding to it, so the row
+      # jobs have to ask for the comment scope themselves: without this the row's own comment - boot reason,
+      # pass times, coverage, crash tail - silently never appears, which is what happened on run 38127110617.
+      pull-requests: write
+      issues: write
+    timeout-minutes: 15
+    # A failed or unbootable core row is not a green branch: the roll-up requires a booted emulator.
+    env:
+      # The row knobs, as env vars rather than `${{ }}` text substitutions: a description or device profile
+      # with a space in it then cannot rewrite a command line, and the composite action the steps live in
+      # reads these the same way (job env is visible to a composite action's steps).
+      API: ${{ matrix.api }}
+      IMG: ${{ matrix.img }}
+      ABI: ${{ matrix.abi }}
+      DEVICE: ${{ matrix.device }}
+      ROW: ${{ matrix.name }}
+      ROW_DESC: ${{ matrix.desc }}
+      VARIANT: ${{ matrix.variant || 'debug' }}
+      LOCATION: ${{ matrix.location || 'denied' }}
+      OFFLINE: ${{ matrix.offline || false }}
+      MONKEY: ${{ needs.plan.outputs.monkey != '' && needs.plan.outputs.monkey || matrix.monkey }}
+      WM_SIZE: ${{ matrix.wm_size || '' }}
+      WM_DENSITY: ${{ matrix.wm_density || '' }}
+      FONT_SCALE: ${{ matrix.font_scale || '' }}
+      FOCUS: ${{ needs.plan.outputs.focus }}
+      GROUP: ${{ matrix.group }}
+      BOOT_TIMEOUT: ${{ needs.plan.outputs.boot_timeout }}
+      ROW_BUDGET_MINUTES: 12  # each parallel partition reports before its 15m deadline
+    continue-on-error: ${{ matrix.optional }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api34-track3
+            desc: "api34 / track3: independent device partition"
+            group: track3
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 0
+          - name: api34-station0
+            desc: "api34 / station0: independent device partition"
+            group: station0
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 0
+          - name: api34-station1
+            desc: "api34 / station1: independent device partition"
+            group: station1
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 0
+          - name: api34-station2
+            desc: "api34 / station2: independent device partition"
+            group: station2
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 0
+          - name: api34-train
+            desc: "api34 / train: independent device partition"
+            group: train
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 0
+          - name: api34-track0
+            desc: "api34 / track0: independent device partition"
+            group: track0
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 0
+          - name: api34-track1
+            desc: "api34 / track1: independent device partition"
+            group: track1
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 0
+          - name: api34-track2
+            desc: "api34 / track2: independent device partition"
+            group: track2
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 0
+          - name: api34-settings-ui
+            desc: "api34 / settings-ui: independent device partition"
+            group: settings-ui
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 600
+          - name: api34-settings-net
+            desc: "api34 / settings-net: independent device partition"
+            group: settings-net
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_6
+            location: granted
+            offline: true
+            monkey: 0
+    steps:
+      # A local action is looked up on disk before any of its steps run, so the repo has to be there first:
+      # this checkout belongs to the job, not to the action. Without it the job dies with
+      # "Can't find 'action.yml' ... Did you forget to run actions/checkout before running your local action?"
+      # and no step of the action ever runs - which is what three rows did here.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/e2e-row
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          row: ${{ matrix.name }}
+          desc: ${{ matrix.desc }}
+          api: ${{ matrix.api }}
+          img: ${{ matrix.img }}
+          abi: ${{ matrix.abi }}
+          device: ${{ matrix.device }}
+          variant: ${{ matrix.variant || 'debug' }}
+          location: ${{ matrix.location || 'denied' }}
+          offline: ${{ matrix.offline || false }}
+          monkey: ${{ needs.plan.outputs.monkey != '' && needs.plan.outputs.monkey || matrix.monkey }}
+          wm_size: ${{ matrix.wm_size || '' }}
+          wm_density: ${{ matrix.wm_density || '' }}
+          font_scale: ${{ matrix.font_scale || '' }}
+          focus: ${{ needs.plan.outputs.focus }}
+          group: ${{ matrix.group }}
+          boot_timeout: ${{ needs.plan.outputs.boot_timeout }}
+
+  e2e_full:
+    needs: [build, instrument, plan]
+    if: needs.plan.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # A job-level `permissions` block replaces the workflow-level one rather than adding to it, so the row
+      # jobs have to ask for the comment scope themselves: without this the row's own comment - boot reason,
+      # pass times, coverage, crash tail - silently never appears, which is what happened on run 38127110617.
+      pull-requests: write
+      issues: write
+    timeout-minutes: 15
+    env:
+      # Identical to the core row's env block by design: two jobs, one action, and the action reads its whole
+      # configuration from here.
+      API: ${{ matrix.api }}
+      IMG: ${{ matrix.img }}
+      ABI: ${{ matrix.abi }}
+      DEVICE: ${{ matrix.device }}
+      ROW: ${{ matrix.name }}
+      ROW_DESC: ${{ matrix.desc }}
+      VARIANT: ${{ matrix.variant || 'debug' }}
+      LOCATION: ${{ matrix.location || 'denied' }}
+      OFFLINE: ${{ matrix.offline || false }}
+      MONKEY: ${{ needs.plan.outputs.monkey != '' && needs.plan.outputs.monkey || matrix.monkey }}
+      WM_SIZE: ${{ matrix.wm_size || '' }}
+      WM_DENSITY: ${{ matrix.wm_density || '' }}
+      FONT_SCALE: ${{ matrix.font_scale || '' }}
+      FOCUS: ${{ needs.plan.outputs.focus }}
+      GROUP: ${{ matrix.group }}
+      BOOT_TIMEOUT: ${{ needs.plan.outputs.boot_timeout }}
+      # Track3's one-minute Auto flow can take 300+ seconds even on API 34;
+      # retain all device assertions and the harness's bounded instrument limit.
+      ROW_BUDGET_MINUTES: ${{ endsWith(matrix.name, '-track3') && 13 || 12 }}
+    continue-on-error: ${{ matrix.optional }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: density-track3
+            desc: "density / track3: independent device partition"
+            group: track3
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 0
+          - name: min24-track3
+            desc: "min24 / track3: independent device partition"
+            group: track3
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 0
+          - name: min24-station0
+            desc: "min24 / station0: independent device partition"
+            group: station0
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 0
+          - name: min24-station1
+            desc: "min24 / station1: independent device partition"
+            group: station1
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 0
+          - name: min24-station2
+            desc: "min24 / station2: independent device partition"
+            group: station2
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 0
+          - name: min24-train
+            desc: "min24 / train: independent device partition"
+            group: train
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 0
+          - name: min24-track0
+            desc: "min24 / track0: independent device partition"
+            group: track0
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 0
+          - name: min24-track1
+            desc: "min24 / track1: independent device partition"
+            group: track1
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 0
+          - name: min24-track2
+            desc: "min24 / track2: independent device partition"
+            group: track2
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 0
+          - name: min24-settings-ui
+            desc: "min24 / settings-ui: independent device partition"
+            group: settings-ui
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 200
+          - name: min24-settings-net
+            desc: "min24 / settings-net: independent device partition"
+            group: settings-net
+            optional: false
+            api: 24
+            img: google_apis
+            abi: x86
+            device: nexus_5
+            location: denied
+            offline: false
+            monkey: 0
+          - name: density-station0
+            desc: "density / station0: independent device partition"
+            group: station0
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 0
+          - name: density-station1
+            desc: "density / station1: independent device partition"
+            group: station1
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 0
+          - name: density-station2
+            desc: "density / station2: independent device partition"
+            group: station2
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 0
+          - name: density-train
+            desc: "density / train: independent device partition"
+            group: train
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 0
+          - name: density-track0
+            desc: "density / track0: independent device partition"
+            group: track0
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 0
+          - name: density-track1
+            desc: "density / track1: independent device partition"
+            group: track1
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 0
+          - name: density-track2
+            desc: "density / track2: independent device partition"
+            group: track2
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 0
+          - name: density-settings-ui
+            desc: "density / settings-ui: independent device partition"
+            group: settings-ui
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 200
+          - name: density-settings-net
+            desc: "density / settings-net: independent device partition"
+            group: settings-net
+            optional: false
+            api: 34
+            img: google_apis
+            abi: x86_64
+            device: pixel_c
+            location: denied
+            offline: false
+            wm_size: 1080x2160
+            wm_density: 440
+            font_scale: 1.15
+            monkey: 0
+    steps:
+      # A local action is looked up on disk before any of its steps run, so the repo has to be there first:
+      # this checkout belongs to the job, not to the action. Without it the job dies with
+      # "Can't find 'action.yml' ... Did you forget to run actions/checkout before running your local action?"
+      # and no step of the action ever runs - which is what three rows did here.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/e2e-row
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          row: ${{ matrix.name }}
+          desc: ${{ matrix.desc }}
+          api: ${{ matrix.api }}
+          img: ${{ matrix.img }}
+          abi: ${{ matrix.abi }}
+          device: ${{ matrix.device }}
+          variant: ${{ matrix.variant || 'debug' }}
+          location: ${{ matrix.location || 'denied' }}
+          offline: ${{ matrix.offline || false }}
+          monkey: ${{ needs.plan.outputs.monkey != '' && needs.plan.outputs.monkey || matrix.monkey }}
+          wm_size: ${{ matrix.wm_size || '' }}
+          wm_density: ${{ matrix.wm_density || '' }}
+          font_scale: ${{ matrix.font_scale || '' }}
+          focus: ${{ needs.plan.outputs.focus }}
+          group: ${{ matrix.group }}
+          boot_timeout: ${{ needs.plan.outputs.boot_timeout }}
+  # Release smoke waits for BOTH artifacts, while debug emulators do not wait
+  # for R8. Keeping it out of the debug matrix removes the serial shrink delay.
+  release_smoke:
+    needs: [build, instrument, release_build, plan]
+    if: needs.plan.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    timeout-minutes: 15
+    env:
+      API: 34
+      IMG: google_apis
+      ABI: x86_64
+      DEVICE: pixel_6
+      ROW: release
+      ROW_DESC: R8 + resource-shrunk release APK smoke
+      VARIANT: release
+      LOCATION: denied
+      OFFLINE: false
+      MONKEY: ${{ needs.plan.outputs.monkey != '' && needs.plan.outputs.monkey || '0' }}
+      GROUP: release
+      ROW_BUDGET_MINUTES: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/e2e-row
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          row: release
+          desc: R8 + resource-shrunk release APK smoke
+          api: 34
+          img: google_apis
+          abi: x86_64
+          device: pixel_6
+          variant: release
+          location: denied
+          offline: false
+          monkey: ${{ needs.plan.outputs.monkey != '' && needs.plan.outputs.monkey || '0' }}
+          focus: ${{ needs.plan.outputs.focus }}
+          group: release
+          boot_timeout: ${{ needs.plan.outputs.boot_timeout }}
+
+  # ---------------------------------------------------------------------------------------- the summary
+  report:
+    # `always()` because `e2e_full` is legitimately skipped by a core-only dispatch, and a skipped dependency
+    # would otherwise skip this job - which is the job that tells you what was and was not tested.
+    needs: [e2e, e2e_full, release_smoke, source_integrity, plan]
+    if: always() && needs.plan.result == 'success'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: e2e-result-*
+          merge-multiple: false
+          path: /tmp/rows
+      - name: Require source-admission fixtures at the installed APK commit
+        env:
+          SOURCE_RESULT: ${{ needs.source_integrity.result }}
+        run: |
+          echo "Source identity/admission fixtures: $SOURCE_RESULT at $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SOURCE_RESULT" != success ]; then
+            echo "::error::source admission fixtures did not pass; HTTP reachability is not verified ACTUAL"
+            exit 1
+          fi
+      - name: What ran, what did not, and whether that is acceptable
+        env:
+          E2E_FULL: ${{ needs.plan.outputs.full }}
+        run: python3 tools/ci/e2e_rollup.py /tmp/rows
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-classes
+          path: /tmp/coverage-classes
+      - name: Flow gate with merged coverage from ALL parallel device partitions
+        run: |
+          set -e
+          unzip -qo /tmp/coverage-classes/e2e-classes.zip -d /tmp
+          find /tmp/rows -path '*/ec/*.ec' -type f -size +0c -print > /tmp/ec-list
+          if [ ! -s /tmp/ec-list ]; then
+            echo "::error::no device coverage data from the parallel partitions"; exit 1
+          fi
+          curl -sSfL --retry 3 --create-dirs -o /tmp/jacoco/org.jacoco.cli-0.8.12-nodeps.jar \
+            https://repo1.maven.org/maven2/org/jacoco/org.jacoco.cli/0.8.12/org.jacoco.cli-0.8.12-nodeps.jar
+          mapfile -t ec < /tmp/ec-list
+          java -jar /tmp/jacoco/org.jacoco.cli-0.8.12-nodeps.jar merge "${ec[@]}" --destfile /tmp/merged.ec
+          bash tools/ci/jacoco_report.sh /tmp/merged.ec /tmp/cls app/src/main/java /tmp/merged-coverage
+          python3 tools/ci/flow_coverage.py --jacoco /tmp/merged-coverage/cov.xml --min-lines 45 --summary
+      - name: Measure cold workflow wall time against the five-minute target
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          created=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
+          elapsed=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
+          echo "Cold e2e workflow: ${elapsed}s from run creation to report (target <=300s)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$elapsed" -gt 300 ]; then
+            echo "::warning::five-minute cold-workflow target missed: ${elapsed}s; GitHub queue, build, SDK install and boot are included"
+          fi
+      - name: Post the roll-up onto the commit
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### e2e roll-up"
+            echo ""
+            echo "| row | boot | tests | coverage |"
+            echo "| --- | --- | --- | --- |"
+            cat /tmp/rows/table.md 2>/dev/null || echo "| (none) | | | |"
+            echo ""
+            echo "Flows are gated against docs/E2E_FLOWS.md; screenshots and window hierarchies are in the"
+            echo "\`e2e-result-*\` artifacts of this run."
+            echo ""
+            echo "The \`--min-lines\` floor is checked against the first row that produced a JaCoCo report;"
+            echo "per-row numbers are in the table above, and they differ because only some rows toggle the"
+            echo "radio or drive the release variant."
+          } > /tmp/body.md
+          gh api -X POST "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -f body="$(cat /tmp/body.md)" \
+            || echo "::warning::could not post the roll-up"
+
+  # Full sweep only: a single strict report correlates these installed-device
+  # partitions with the Android workflow's SAME-SHA APK, unit tests, render
+  # assertions, source contracts, signing, release bytes and real durations.
+  # It must run even after a red report, because red runs need the root cause most.
+  audit:
+    needs: [plan, report, e2e, e2e_full, release_smoke]
+    if: always() && needs.plan.outputs.full == 'true'
+    permissions:
+      actions: read
+      contents: write
+    uses: ./.github/workflows/apk-audit.yml
+    with:
+      e2e_run_id: ${{ github.run_id }}
+    secrets: inherit

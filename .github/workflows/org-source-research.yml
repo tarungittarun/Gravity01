@@ -1,0 +1,76 @@
+# Historical Java-HTTP comparison only. Production selected website now uses WebView;
+# urllib is NOT the APK's browser request and cannot guarantee phone access.
+# Push trigger only when this trial changes, never on ordinary app edits/refresher taps.
+name: org-website-request-trial
+on:
+  push:
+    branches: ['arena/**']
+    paths:
+      - 'tools/ci/site_request_trial.py'
+      - 'tools/ci/test_site_request_trial.py'
+  workflow_dispatch:
+    inputs:
+      train_number:
+        description: 'Five-digit train number; one GET only (no retry or challenge handling)'
+        type: string
+        default: '20689'
+permissions:
+  contents: write # post only the bounded JSON verdict to this commit for API-visible evidence
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline refusal simulations and historical Java-HTTP contract
+        run: |
+          python3 tools/ci/test_site_request_trial.py
+          python3 tools/ci/site_request_trial.py --contract
+      - name: Single bounded runner GET; fail visibly on refusal or non-train page
+        # Explicit opt-in prevents another live GET when merely fixing the trial/tests.
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[site-trial]')
+        env:
+          TRAIN_NUMBER: ${{ inputs.train_number || '20689' }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set +e
+          python3 tools/ci/site_request_trial.py "$TRAIN_NUMBER" > site-request-result.json
+          result=$?
+          set -e
+          {
+            echo '### Independent website request trial — GitHub runner, not Android phone'
+            echo 'Historical urllib/Java HTTP comparison only, NOT the selected APK WebView transport. No cookies, redirects, retries or challenge automation. HTTP 200 with matching cards is structure only, not phone access.'
+            echo '```json'
+            cat site-request-result.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The sandbox cannot fetch Actions' external artifact host. An annotation
+          # and bounded commit comment make the actual result visible via GitHub API.
+          if [ -s site-request-result.json ]; then
+            verdict=$(cat site-request-result.json)
+            if [ "$result" -eq 0 ]; then
+              echo "::notice title=Website structure only::$verdict"
+            else
+              echo "::error title=Website refusal or inconclusive response::$verdict"
+            fi
+            { echo '### GitHub-runner website request (not phone access)'; echo '```json';
+              cat site-request-result.json; echo '```'; } > site-request-comment.md
+            gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
+              -F body=@site-request-comment.md > /dev/null || echo '::warning::Commit comment unavailable; see run summary/artifact'
+          fi
+          exit "$result"
+      - name: Note when only offline guards ran (no provider request)
+        if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[site-trial]')
+        run: echo '::notice::Offline contract/tests passed; no website GET was requested or proven.'
+      - name: Save bounded result even if the website refuses
+        if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[site-trial]'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: org-website-request-result
+          path: site-request-result.json
+          if-no-files-found: warn
+          retention-days: 7

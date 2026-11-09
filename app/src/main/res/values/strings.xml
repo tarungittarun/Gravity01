@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TrackTrain</string>
+
+    <string name="mode_stations">Stations</string>
+    <string name="mode_train">Train no. / name</string>
+    <string name="hint_from">From station — name or code</string>
+    <string name="hint_to">To station — name or code</string>
+    <string name="hint_train">Train number or name</string>
+    <string name="search">Find</string>
+    <string name="edit_search">Edit search</string>
+    <string name="back_to_trains">Train list</string>
+    <string name="window_hint">window −24 h … +24 h</string>
+    <string name="day_back">−1d</string>
+    <string name="day_fwd">+1d</string>
+    <string name="day_now">now</string>
+    <string name="settings">Settings</string>
+    <string name="track">Track</string>
+    <string name="col_delay">Delay</string>
+    <string name="col_next">Next stop</string>
+    <string name="col_plot">Timetable against position</string>
+    <string name="tag_here">here now</string>
+    <string name="tag_cancelled">cancelled here</string>
+    <string name="tag_skipped">does not stop</string>
+    <string name="tag_board">you board</string>
+    <string name="tag_alight">you get off</string>
+    <string name="tag_origin">starts here</string>
+    <!-- What the bright column *is*. A minute in that column can be a report or a projection, and the
+         colour alone is not an answer for everyone, so the column says which in a word. -->
+    <string name="tag_actual">actual</string>
+    <string name="tag_expected">expected</string>
+    <string name="tag_no_report">no report</string>
+    <string name="tag_due">due</string>
+    <string name="tag_timetable">timetable</string>
+    <string name="tag_terminal">end of run</string>
+    <string name="sched_cap">SCH</string>
+    <string name="live_cap">LIVE</string>
+    <string name="exp_cap">EXP</string>
+    <string name="assumed_cap">AS SCHEDULED</string>
+    <string name="rows_window">showing stops %1$d–%2$d of %3$d</string>
+    <string name="jump_to_segment">Jump to my segment</string>
+
+    <string name="searching">Searching on-device timetable…</string>
+    <string name="report_toggle_on">Report a time (helps other travellers)</string>
+    <string name="report_toggle_off">Hide report controls</string>
+    <string name="report_heading">Report what you see. One tap publishes an anonymous note to the public ntfy.sh relay - station code and minute only, no account, no location, nothing personal. Readers see it as \'reported by travellers\', never as official data.</string>
+    <string name="report_arrived">Arrived here</string>
+    <string name="report_departed">Departed here</string>
+    <string name="report_loopback">Send relay loopback test</string>
+    <string name="report_listening">Listening to the public relay for this train — no traveller reports yet. Yours will appear the moment you send one below.</string>
+    <string name="first_load">Fetching this train\'s screen — the live sources are being asked…</string>
+    <string name="installing_data">Installing offline timetable… %1$d%%</string>
+    <string name="installing_data_first_frame">Opening built-in timetable…</string>
+    <string name="err_need_two_stations">Enter both stations (name or 3–4 letter code).</string>
+    <string name="err_need_train_query">Enter at least 3 characters of the train number or name.</string>
+    <string name="err_station_unknown">No station matches that. Try the 3–4 letter code (MAS, NDLS, SBC).</string>
+    <string name="err_no_direct">No direct train between those two in the offline timetable. Try a nearby junction, or search the train number.</string>
+    <string name="err_wrong_date">Nothing in the ±24 h window for that date. Try ±1 day.</string>
+    <string name="err_same_station">Boarding and alighting station are the same.</string>
+
+    <string name="refresh">Refresh</string>
+    <string name="auto_refresh_minute">Auto · 1 min</string>
+    <string name="back">Back</string>
+
+    <string name="settings_override_title">Live data endpoint</string>
+    <string name="settings_override_hint">Advanced, optional: use only if you run a compatible JSON feed. Leave blank for the built-in public source. The tracking default above controls the first source used on a train.</string>
+    <string name="settings_columns_title">Live feed column map</string>
+    <string name="settings_columns_hint">Only needed if the public feed changes its field order, e.g. 1:code,2:name,3:sa,4:sd,5:aa,6:ad</string>
+    <string name="save">Save</string>
+    <string name="clear_cache">Clear live cache</string>
+
+    <!-- Search screen, static labels only: every sentence that contains a number or a station name is
+         built in code next to the formatter that guarantees its units. -->
+    <string name="lbl_from">Board at</string>
+    <string name="lbl_to">Get off at</string>
+    <string name="lbl_when">Travelling</string>
+    <string name="swap">Swap</string>
+    <string name="sorted_by">sorted by departure</string>
+    <string name="selected_station">Selected</string>
+    <string name="suggestions_title">Matches</string>
+    <string name="col_station">Station</string>
+    <string name="source_label">Source</string>
+    <string name="source_info">About times</string>
+    <string name="col_scheduled">Scheduled</string>
+    <string name="col_arrival">Arrival</string>
+    <string name="col_departure">Departure</string>
+    <string name="col_distance">km</string>
+    <string name="sec_position">Where it is now</string>
+    <string name="sec_progress">Journey progress</string>
+    <string name="sec_route">Timetable</string>
+    <string name="live_chip">live</string>
+    <string name="no_live_data">Shown from the timetable — no live report reached this device</string>
+    <string name="empty_results">Nothing matches yet. Type at least three letters of a station or train.</string>
+    <string name="trains_between">%1$d train(s) · %2$s → %3$s</string>
+
+    <plurals name="trains_found">
+        <item quantity="one">%d train</item>
+        <item quantity="other">%d trains</item>
+    </plurals>
+    <string name="feed_report_copied">Live-feed report copied to the clipboard</string>
+    <string name="feed_report_empty">Nothing to report yet — the screen has not finished loading</string>
+    <string name="settings_diag_title">Diagnostic log</string>
+    <string name="settings_diag_hint">Off by default. A website HTTP 403 records its exact URL (including train number), UTC time and original CDN request ID for private operator diagnosis. No response body or cookies are recorded. The log stays on this phone unless you share or save it; share the request ID privately, not in a public issue.</string>
+    <string name="settings_diag_on">Turn on collection</string>
+    <string name="settings_diag_off">Turn off collection</string>
+    <string name="settings_diag_share">Share</string>
+    <string name="settings_diag_save">Save to file</string>
+    <string name="settings_diag_clear">Clear</string>
+    <string name="diag_saved">Diagnostic log saved</string>
+    <string name="diag_nothing">Nothing collected yet</string>
+    <string name="diag_empty_hint">Turn collection on, reproduce the problem, then come back here to share or save it</string>
+    <string name="battery_mode">Battery mode</string>
+    <string name="battery_mode_hint">Black OLED surfaces, plain text route and no motion. Keeps source, delay and next stop. Independent of Appearance; automatic refresh stays your choice.</string>
+</resources>

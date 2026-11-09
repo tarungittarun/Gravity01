@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Inside SuggestBox. The panel is a plain LinearLayout in a ScrollView: at most seven rows, no
+     adapter, no diffing, and it inflates identically under a JVM render test. -->
+<merge xmlns:android="http://schemas.android.com/apk/res/android">
+    <EditText
+        android:id="@+id/suggestInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_field"
+        android:fontFamily="sans-serif-medium"
+        android:imeOptions="actionSearch"
+        android:importantForAutofill="no"
+        android:inputType="textCapCharacters|textNoSuggestions"
+        android:letterSpacing="0.02"
+        android:maxLines="1"
+        android:minHeight="52dp"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingLeft="14dp"
+        android:paddingRight="14dp"
+        android:singleLine="true"
+        android:textColor="@color/text1"
+        android:textColorHint="@color/text3"
+        android:textSize="16sp" />
+
+    <TextView
+        android:id="@+id/suggestChip"
+        style="@style/Pill"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/bg_pill_accent"
+        android:textColor="@color/accent" />
+
+    <ScrollView
+        android:id="@+id/suggestScroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/bg_inset"
+        android:maxHeight="228dp"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/suggestPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp" />
+    </ScrollView>
+</merge>

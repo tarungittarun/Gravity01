@@ -1,0 +1,2 @@
+{"id":"QAjhuL9tktAO","time":1791811411,"expires":1791854611,"event":"message","topic":"ct-cap-38254956503","message":"{\"trainNo\":\"00000\",\"stationCode\":\"CAP\",\"kind\":\"DEPARTED\",\"railMinute\":1025,\"reportedAt\":1791810000000}"}
+

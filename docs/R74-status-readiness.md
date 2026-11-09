@@ -1,0 +1,5 @@
+# R74 — a completed search must not hide its own answer
+
+A static audit during the replacement run found the cause of several R71's blank-status assertions. `MainViewModel.search()` emits `results` and immediately emits `Phase.Ready`. `MainActivity.renderReport()` made its result sentence visible, but `renderPhase(Ready)` unconditionally hid `statusLine` in the next observer callback. Thus a no-match or unknown-station query could complete correctly in the database and still say **nothing** to the traveller. `renderPhase(Ready)` now keeps the line visible when a report exists; a later live note also preserves it. Initial readiness still hides the empty status line. A Robolectric test drives a bogus train search through the real Activity and checks the completed no-match sentence remains visible after Ready.
+
+The replacement device run following R71's failures is necessary; this static root cause is not a device pass. R71 did boot API 34 and produce a 52.4% JaCoCo report, but five instrumented passes failed. Full API 24/release coverage and independent verified actuals remain unproven. PR #3 is not to be merged without the user's phone confirmation.

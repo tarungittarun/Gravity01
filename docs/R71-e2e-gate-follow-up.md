@@ -1,0 +1,12 @@
+# R71 — do less twice, and fail honestly
+
+R70 Android compile/unit/render run `38633778797` passed. Its device row was still booting when this follow-up identified additional harness defects. R70's device result is not a claimed pass.
+
+- Tracking's `@Before` runs before every assertion. It selected a train, which **already starts a search**, and then tapped Find again. The tests now wait on that single search. The same duplicate tap was removed from offline, settings and release flows; explicit Find-button tests remain.
+- A release-smoke selector was split across lines, evading the one-line static guard and passing `id/stopName` to `By.res(package, id)` (which already adds `id/`). The release test uses `E2E.res("stopName")`; the selector guard now catches line-wrapped calls too.
+- The offline tracking flow returned from its test or used an assumption if the supposedly installed train was missing. It now fails rather than claiming a green flow without a tracking screen.
+- `run_suite` previously declared a class without `Tests run:` failed, even though AndroidJUnitRunner reports a green class as `OK (N tests)`. It now accepts a positive test count in either format, rejects zero/missing output, and explicitly fails the suite and roll-up if the row budget **skips** any pass. A locally simulated booted-but-skipped row returned exit status 1.
+- Coverage previously asked the `shell` UID to create an external directory and expected the app to write into it; earlier rows printed `Failed to generate Emma/JaCoCo coverage`. The next run tries the **app-owned internal files directory** using `run-as`, and retrieves binary bytes with `adb exec-out`. This is a hypothesis to validate on the emulator, not a claim that JaCoCo now works. Release smoke does not request coverage because its APK has no coverage agent.
+- The composite action's commit-comment block had two double-quoted Markdown fences (`echo "```"`), which Bash treats as command-substitution delimiters and which broke `bash -n`; those are now single-quoted. All run blocks in the e2e workflow and action pass `bash -n` after YAML parsing.
+
+A branch push still exercises only the API 34 core row. The full API 24/density/release sweep is explicitly required before release; neither the rolling debug APK nor the open PR is evidence that those rows have passed. Actual NTES/independent-source stop times and on-phone usability remain to be verified.

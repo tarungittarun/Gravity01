@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- High contrast daylight palette. All surfaces, labels, rails and status colours are
+     resource names shared with values-night; no screen paints dark-only hardcoded ink. -->
+<resources>
+    <color name="bg">#FFF5F8FA</color>
+    <color name="surface">#FFFFFFFF</color>
+    <color name="surface2">#FFEDF3F6</color>
+    <color name="field">#FFF8FBFC</color>
+    <color name="pill">#FFE7F0F4</color>
+    <color name="stroke">#FFACBEC8</color>
+    <color name="ripple">#33082B4B</color>
+    <color name="text1">#FF14232C</color>
+    <color name="text2">#FF405762</color>
+    <color name="text3">#FF516976</color>
+    <color name="accent">#FF06723C</color>
+    <color name="accent_soft">#FFD5F4E3</color>
+    <color name="accent_ink">#FFFFFFFF</color>
+    <color name="live">#FF145EA8</color>
+    <color name="live_soft">#FFE5F1FF</color>
+    <!-- Distinct solid action and outlined information card, never a ghost-on-card control. -->
+    <color name="refresh_surface">#FF1256A0</color>
+    <color name="refresh_border">#FF093F79</color>
+    <color name="refresh_ink">#FFFFFFFF</color>
+    <color name="summary_surface">#FFDFEFFF</color>
+    <color name="summary_border">#FF5799D3</color>
+    <color name="summary_ink">#FF16446C</color>
+    <color name="warn">#FF815000</color>
+    <color name="warn_soft">#FFFFF0CE</color>
+    <color name="late">#FFAE2929</color>
+    <color name="late_soft">#FFFFEBE8</color>
+    <color name="early">#FF137442</color>
+    <color name="delay_neutral">#FF315A78</color>
+    <color name="connection_surface">#FFFFEAE4</color>
+    <color name="connection_ink">#FF8F2721</color>
+    <color name="ink_on_accent">#FFFFFFFF</color>
+</resources>

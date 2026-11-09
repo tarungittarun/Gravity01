@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The settings screen exists so that "the public feed changed its columns" is recoverable by the user
+  rather than by a new release. It is grouped as one card per decision, in the order a person needs
+  them: what is installed, where live data comes from, how often to ask, then the two levers.
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/settingsScroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/gap">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/back"
+                style="@style/IconAction"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_back"
+                android:contentDescription="@string/back" />
+
+            <TextView
+                style="@style/TextHeadline"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:text="@string/settings"
+                android:textSize="19sp" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/Card" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:layout_marginTop="@dimen/gap"
+            android:background="@drawable/bg_card" android:orientation="vertical">
+            <TextView style="@style/FieldLabel" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="Tracking default" />
+            <Spinner android:id="@+id/defaultTrackingSource" android:layout_width="match_parent"
+                android:layout_height="48dp" android:layout_marginTop="8dp"
+                android:background="@drawable/bg_inset"
+                android:contentDescription="Default tracking data source" />
+            <TextView style="@style/TextMeta" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="Also available on each train's tracking screen" />
+            <TextView style="@style/FieldLabel" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="16dp"
+                android:text="Appearance" />
+            <Spinner android:id="@+id/appearance" android:layout_width="match_parent"
+                android:layout_height="48dp" android:layout_marginTop="8dp"
+                android:background="@drawable/bg_inset"
+                android:contentDescription="Appearance: follow system, light or dark" />
+        </LinearLayout>
+
+        <LinearLayout style="@style/Card"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap" android:background="@drawable/bg_card"
+            android:orientation="vertical">
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/batteryMode"
+                android:layout_width="match_parent" android:layout_height="48dp"
+                android:gravity="center_vertical" android:text="@string/battery_mode"
+                android:textColor="@color/text1" />
+            <TextView style="@style/TextMeta" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="4dp"
+                android:text="@string/battery_mode_hint" />
+        </LinearLayout>
+
+        <LinearLayout
+            style="@style/Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/TextLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="ON THIS DEVICE" />
+
+            <TextView
+                android:id="@+id/state"
+                style="@style/TextBody"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            style="@style/Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/FieldLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_override_title" />
+
+            <TextView
+                style="@style/TextMeta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/settings_override_hint" />
+
+            <EditText
+                android:id="@+id/overrideUrl"
+                style="@style/EditField"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:hint="https://…"
+                android:inputType="textUri"
+                android:textSize="14sp" />
+
+            <TextView
+                style="@style/FieldLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="@string/settings_columns_title" />
+
+            <TextView
+                style="@style/TextMeta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/settings_columns_hint" />
+
+            <EditText
+                android:id="@+id/columnHint"
+                style="@style/EditField"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:hint="1:code,3:sa,4:sd"
+                android:inputType="text"
+                android:textSize="14sp" />
+
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/save"
+                    style="@style/BtnPrimary"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/save" />
+
+                <Button
+                    android:id="@+id/clear"
+                    style="@style/BtnGhost"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/clear_cache" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            style="@style/Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/FieldLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_diag_title" />
+
+            <TextView
+                style="@style/TextMeta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/settings_diag_hint" />
+
+            <Button
+                android:id="@+id/diagToggle"
+                style="@style/BtnPrimary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/settings_diag_on" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/diagShare"
+                    style="@style/BtnGhost"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/settings_diag_share" />
+
+                <Button
+                    android:id="@+id/diagSave"
+                    style="@style/BtnGhost"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/settings_diag_save" />
+
+                <Button
+                    android:id="@+id/diagClear"
+                    style="@style/BtnGhost"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/settings_diag_clear" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/diagState"
+                style="@style/TextMicro"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/about"
+            style="@style/TextMicro"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/gap"
+            android:lineSpacingExtra="3sp" />
+    </LinearLayout>
+</ScrollView>

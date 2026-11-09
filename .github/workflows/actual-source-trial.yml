@@ -1,0 +1,33 @@
+name: actual-source-trial
+
+on:
+  push:
+    branches: ['arena/**']
+    paths:
+      - '.github/workflows/actual-source-trial.yml'
+      - 'tools/ci/probe_railyatri_actuals.py'
+      - 'tools/ci/probe_wimt.py'
+      - 'tools/ci/probe_position_feeds.py'
+      - 'tools/ci/probe_wimt_position.py'
+      - 'tools/ci/probe_browser_train_page.py'
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect same-run RailYatri evidence without promoting projected rows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/probe_railyatri_actuals.py | tee railyatri-actuals-trial.txt
+          python3 tools/ci/probe_wimt.py | tee wimt-actuals-trial.txt
+          python3 tools/ci/probe_position_feeds.py | tee position-feeds-trial.txt
+          python3 tools/ci/probe_wimt_position.py | tee wimt-position-trial.txt
+          python3 tools/ci/probe_browser_train_page.py | tee browser-trial.txt
+          { echo 'Read-only source trials (page rows and predictions are NOT proof of actuals):'; echo '```'; cat railyatri-actuals-trial.txt wimt-actuals-trial.txt position-feeds-trial.txt wimt-position-trial.txt browser-trial.txt; echo '```'; } > source-comment.txt
+          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" -f body="$(cat source-comment.txt)"

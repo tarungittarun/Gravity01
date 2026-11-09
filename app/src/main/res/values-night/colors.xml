@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Night palette for system/dark mode; daylight counterparts use identical names. -->
+<resources>
+    <color name="bg">#FF070C11</color>
+    <color name="surface">#FF101A22</color>
+    <color name="surface2">#FF16232E</color>
+    <color name="field">#FF0D151C</color>
+    <color name="pill">#FF1B2A36</color>
+    <color name="stroke">#FF24343F</color>
+    <color name="ripple">#33FFFFFF</color>
+
+    <color name="text1">#FFEAF2F7</color>
+    <color name="text2">#FF9FB4C2</color>
+    <color name="text3">#FF9AACB8</color>
+
+    <color name="accent">#FF37C978</color>
+    <color name="accent_soft">#FF163A29</color>
+    <color name="accent_ink">#FF052012</color>
+    <color name="live">#FF54A9FF</color>
+    <color name="live_soft">#FF11293D</color>
+    <!-- Elevated blue control and card against near-black, with white/high-contrast ink. -->
+    <color name="refresh_surface">#FF1464A6</color>
+    <color name="refresh_border">#FF7BBEFF</color>
+    <color name="refresh_ink">#FFFFFFFF</color>
+    <color name="summary_surface">#FF173750</color>
+    <color name="summary_border">#FF5192C5</color>
+    <color name="summary_ink">#FFD7EEFF</color>
+    <color name="warn">#FFF2B33D</color>
+    <color name="warn_soft">#FF3A2C10</color>
+    <color name="late">#FFFF6F5E</color>
+    <color name="late_soft">#FF3A1A17</color>
+    <color name="early">#FF65DA92</color>
+    <color name="delay_neutral">#FFB9D6E9</color>
+    <color name="connection_surface">#FF33202A</color>
+    <color name="connection_ink">#FFFFAD9D</color>
+    <color name="ink_on_accent">#FF06200F</color>
+</resources>

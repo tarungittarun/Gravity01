@@ -1,0 +1,15 @@
+# R156 — preserving accepted past clocks without inventing actuals
+
+## Evidence (user diary 2026-10-28 04:54, train 16227, origin 27 Oct)
+
+NTES answered with 29 same-run stops, 13 accepted stops with per-stop minutes and latest event SMET arrival 04:51 (+1d). The screenshot showed BDVT and SME scheduled clocks with blank official ACTUAL cells. This diary does **not** contain those two NTES raw ETA/ETD/delay cells, so it cannot prove that the parser dropped a genuine official actual: `trustedRows` requires run identity, delay-bearing changed ETA/ETD, elapsed event and schedule plausibility. An earlier website reply had past cards BDVT 04:01/04:32 and SME 04:41 (run date inferred), but its page was no longer within the selected-source freshness window at the 04:54 NTES fallback. Those are site claims, **not** NTES Act.
+
+## Change
+
+- For *future* requests only, preserve an **already accepted** official per-cell arrival/departure when a later accepted official response omits it. A paired official route and same train/origin run, equal station order and timetable clocks, previous accepted event, station already reached by the *new* official anchor, plausible deviation, noncancelled row and no newer conflicting actual are all required. No website/erail estimate/schedule echo can enter this cache. The official last-event anchor, age, provenance and refresh receipt stay from the current response. Persist a per-cell `savedClocks` marker with the paired official run so the row says `NTES saved arr/dep` and accessibility explains that it is *not a new event*. The existing 24-hour stale-cache/run-date safeguards remain intact; a cache clear removes this ledger.
+- If a previously qualified website report ages out or a new page fails its freshness gate, retain its original past cards **only as source-labelled historical comparison** beside missing NTES cells for up to 12 hours; never refresh their age, move the official marker, or populate Act. In this screen-only history the row says `Web past (saved)`; future forecasts remain excluded. A first-time missing past card still stays blank if neither source has evidence.
+- When the optional diary is enabled, the next accepted NTES response records up to ten recent covered rows missing accepted clocks, with only station codes, raw STA/STD, ETA/ETD, DARR/DDEP, explicit ATA/ATD and accepted minutes. No full encrypted payload, credentials, cookies or passenger data. This distinguishes absent publisher fields from parsing/gating issues on the *next* real-phone report; this earlier diary cannot answer that question retroactively.
+
+## Validation
+
+Robolectric ledger tests cover omission retention, cache round-trip, marker immobility, changed newer actual, missing run/changed schedule, future station and schedule echo rejection. UI render regression checks source-labelled website history and per-row saved-NTES disclosure. This does not claim BDVT/SME official clocks were confirmed in the attached 04:54 NTES reply. PR #3 stays open; manual-only E2E is not dispatched.

@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The search screen. One card holds the whole question (board / get off / travelling when) because that
+  is one decision, and the results list sits under it without competing chrome. No ScrollView around the
+  results: the list weights to the remaining height, which keeps RecyclerView recycling real.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical"
+    android:paddingLeft="@dimen/gap"
+    android:paddingTop="@dimen/gap"
+    android:paddingRight="@dimen/gap"
+    android:paddingBottom="0dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:baselineAligned="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:id="@+id/homeBrand"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="TrackTrain · Home">
+            <ImageView android:layout_width="36dp" android:layout_height="36dp"
+                android:src="@drawable/ic_launcher" android:contentDescription="@null" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginStart="8dp" android:text="@string/app_name"
+                android:textColor="@color/text1" android:textSize="22sp"
+                android:fontFamily="sans-serif-medium" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/settings"
+            style="@style/IconAction"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_settings"
+            android:contentDescription="@string/settings" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/dataChip"
+        style="@style/Pill"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" />
+
+    <LinearLayout
+        android:id="@+id/searchCompact"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/editSearch"
+            style="@style/BtnGhost"
+            android:background="@drawable/ripple_btn_edit"
+            android:textColor="@color/live"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/edit_search" />
+    </LinearLayout>
+
+    <!-- Keep Find reachable when the keyboard and large font consume the viewport. The
+         results list remains a separate weighted viewport; after a search the whole card
+         scroller disappears, so result rows get the screen back. -->
+    <in.opentrack.india.ui.BoundedSearchScroll
+        android:id="@+id/searchCardScroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="2"
+        android:fillViewport="false"
+        android:scrollbars="vertical">
+    <LinearLayout
+        android:id="@+id/searchCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:background="@drawable/bg_card"
+        android:elevation="2dp"
+        android:orientation="vertical"
+        android:padding="16dp">
+    <TextView style="@style/FieldLabel" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:layout_marginBottom="8dp"
+        android:text="SEARCH BOX" />
+    <LinearLayout
+        android:id="@+id/modeRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="14dp"
+        android:background="@drawable/bg_segment"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/modeStations"
+            style="@style/Segment"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@null"
+            android:text="@string/mode_stations" />
+
+        <Button
+            android:id="@+id/modeTrain"
+            style="@style/Segment"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@null"
+            android:text="@string/mode_train" />
+    </LinearLayout>
+        <!-- Two station rows occupy the left three quarters. Swap is a single
+             thumb-sized control at their right, not a third vertical row. -->
+        <LinearLayout android:id="@+id/stationInputs"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:gravity="center_vertical">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="3" android:orientation="vertical">
+                <in.opentrack.india.ui.SuggestBox android:id="@+id/fromBox"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" />
+                <in.opentrack.india.ui.SuggestBox android:id="@+id/toBox"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp" />
+            </LinearLayout>
+            <Button android:id="@+id/swap" style="@style/BtnGhost"
+                android:layout_width="0dp" android:layout_height="56dp"
+                android:layout_weight="1" android:layout_marginStart="8dp"
+                android:text="⇅" android:textSize="26sp"
+                android:contentDescription="Swap boarding and arrival stations" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/trainLabel"
+            style="@style/TextLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/hint_train"
+            android:visibility="gone" />
+
+        <in.opentrack.india.ui.SuggestBox
+            android:id="@+id/trainBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:visibility="gone" />
+
+        <!-- No ten-day historical calendar until independently dated actuals exist.
+             These compact controls only select the existing timetable ±24h window. -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="10dp" android:orientation="horizontal"
+            android:gravity="center_vertical">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="3" android:orientation="vertical">
+                <TextView android:id="@+id/whenValue" style="@style/TextMeta"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:singleLine="true" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:background="@drawable/bg_segment">
+                    <Button android:id="@+id/dayBack" style="@style/Segment"
+                        android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:paddingStart="0dp" android:paddingEnd="0dp" android:background="@null"
+                        android:text="@string/day_back" />
+                    <Button android:id="@+id/dayNow" style="@style/Segment"
+                        android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:paddingStart="0dp" android:paddingEnd="0dp" android:background="@null"
+                        android:text="@string/day_now" />
+                    <Button android:id="@+id/dayFwd" style="@style/Segment"
+                        android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:paddingStart="0dp" android:paddingEnd="0dp" android:background="@null"
+                        android:text="@string/day_fwd" />
+                </LinearLayout>
+            </LinearLayout>
+            <Button android:id="@+id/find" style="@style/BtnPrimary"
+                android:layout_width="0dp" android:layout_height="54dp"
+                android:layout_weight="1" android:layout_marginStart="8dp"
+                android:paddingStart="2dp" android:paddingEnd="2dp"
+                android:text="@string/search" android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+    </in.opentrack.india.ui.BoundedSearchScroll>
+
+    <TextView
+        android:id="@+id/statusLine"
+        style="@style/TextMeta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/installing_data_first_frame" />
+
+    <!-- Only the feed's own stamp is called a source date. This occupies the old
+         empty gap even when Edit search reopens the form above the results. -->
+    <TextView android:id="@+id/resultsSummary" style="@style/TextMeta"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:maxLines="3"
+        android:background="@drawable/bg_summary_card"
+        android:textColor="@color/summary_ink"
+        android:paddingStart="12dp" android:paddingEnd="12dp"
+        android:paddingTop="8dp" android:paddingBottom="8dp"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/resultsHead"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:baselineAligned="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingTop="6dp"
+        android:paddingBottom="4dp">
+        <TextView
+            android:id="@+id/resultsTitle"
+            style="@style/TextTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="SEARCHED TRAINS" />
+        <TextView android:id="@+id/resultsSub" style="@style/TextMicro"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:visibility="gone" />
+        <LinearLayout android:id="@+id/resultsSortRow"
+            android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:gravity="center_vertical"
+            android:orientation="horizontal" android:visibility="gone">
+            <TextView style="@style/TextMicro" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:text="Sort by" />
+            <FrameLayout android:layout_width="0dp" android:layout_height="40dp"
+                android:layout_marginStart="4dp" android:layout_weight="1">
+                <Spinner android:id="@+id/resultsSort"
+                    android:layout_width="match_parent" android:layout_height="match_parent"
+                    android:background="@drawable/bg_inset" android:spinnerMode="dropdown"
+                    android:contentDescription="Sort trains by departure, arrival or duration" />
+                <ImageView android:id="@+id/sortArrow"
+                    android:layout_width="16dp" android:layout_height="16dp"
+                    android:layout_gravity="end|center_vertical" android:layout_marginEnd="6dp"
+                    android:src="@drawable/ic_sort_arrow" android:contentDescription="@null"
+                    android:clickable="false" android:focusable="false" />
+            </FrameLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/results"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingBottom="@dimen/gap"
+        android:scrollbars="vertical" />
+</LinearLayout>

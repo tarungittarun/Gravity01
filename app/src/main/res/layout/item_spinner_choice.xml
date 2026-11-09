@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One row of the auto-refresh chooser. The framework's `simple_list_item_1` would work, but it brings its
+  own text appearance (a large, untracked system size) and its own padding, so the closed spinner and its
+  popup would be the only two places on this screen where the type scale is not ours. A Spinner shows the
+  selected item with the *same* layout, so this file is both the row and the chip.
+-->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    style="@style/TextBody"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/field"
+    android:gravity="center_vertical"
+    android:minHeight="48dp"
+    android:paddingStart="12dp"
+    android:paddingTop="10dp"
+    android:paddingEnd="12dp"
+    android:paddingBottom="10dp"
+    android:singleLine="true" />

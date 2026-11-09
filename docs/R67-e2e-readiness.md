@@ -1,0 +1,5 @@
+# Device flow readiness correction · 14 October 2026
+
+API-34 run `38613235175` still failed. The keyboard-gesture exception from the previous run is gone; tests now reach the suggestion boxes and source controls. The new common failures are missing suggestions, an empty settings result, and a cold second test with no board-at field. The harness had been treating an *empty* `statusLine` as proof that extraction was complete (`!status.contains("Installing")`). That is a race, not a readiness signal: `MainViewModel` refuses search/suggestions until it reaches `Phase.Ready`, when it writes the non-empty `dataChip`. The device harness now waits for that chip or fails explicitly with the phase text, and the cold test's second method independently launches the search screen rather than depending on method order.
+
+This fixes a **test timing error**; it does not assert that the offline asset actually became ready on those runners. The next completed device run must distinguish a real asset-install failure from this harness race. The eRail HTML/no-verifiable-actuals result remains separate; JaCoCo has still reported no coverage file and must not be called a pass.

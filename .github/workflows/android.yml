@@ -1,0 +1,637 @@
+# The APK is built here, not on a laptop: this repository is set up so that `git push` is the whole
+# build process (no Android SDK, no Gradle, no keystore needed locally).
+#
+# Four jobs, cheapest first, so a broken push fails in ~30 s instead of 12 minutes:
+#   checks  - static consistency checks that need no toolchain (see tools/ci/)
+#   ui      - every unit test, including the Robolectric render tests that paint the screens; the PNGs are
+#             uploaded and the small JPEGs are posted onto the commit as base64 so they can be reviewed
+#   build   - debug APK, uploaded as an artifact (no tests: `ui` runs them, in parallel with this)
+#   release - only on a tag: R8 release build, optional signing, GitHub Release
+#
+# `ui` and `build` both need the generated timetable asset, so both call tools/ci/prepare_asset.sh; they
+# run at the same time on purpose. Splitting them is what turned a ~6 minute serial pipeline into a
+# ~3.5 minute wall clock, and it keeps the APK flowing to a real device even while a screen render is red.
+name: android
+on:
+  push:
+    branches: [main, 'feature/**', 'arena/**']
+    tags: ['v*']
+  # pull_request deliberately REMOVED (ADR-001): with the session branch always open as a PR, every
+  # push fired this workflow twice (push + PR events), doubling runner-minutes and artifacts. The
+  # round report on the PR body carries the run ids; the PR tab is a review surface, not a CI surface.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Kotlin lexical integrity (catches truncated files)
+        run: python3 tools/ci/check_kotlin_balance.py app/src
+      - name: Types and imports referenced across files
+        run: python3 tools/ci/check_refs.py app/src/main/java
+      - name: R.* and ViewBinding references, and references inside res/
+        run: python3 tools/ci/check_resources.py
+      # The compiler is the only thing that can see a typo'd member (`Suggestion.RowText` when the object
+      # is `TitleCase`), and there is no kotlinc in the sandbox this code is written from. This is the
+      # coarse stand-in that has already caught three of those before a push.
+      - name: Receiver-member references
+        run: python3 tools/ci/check_members.py
+      # Every diagnostic string here has been written or rewritten by a scripted patch, and more than once an
+      # escape leaked into the source: a template that is valid Kotlin and renders literal gibberish on the
+      # user's screen. This checker exists because reading the diff was not enough to catch it.
+      - name: No patch-script escaping leaked into Kotlin strings
+        run: python3 tools/ci/check_literals.py
+      - name: UiAutomator selectors must not double the resource-id prefix
+        run: python3 tools/ci/test_e2e_selectors.py
+      - name: Workflow and action files parse the way Actions requires
+        # The self-test runs first: a duplicate mapping key invalidates the whole file and the runner's only
+        # comment is that the workflow is malformed, so this checker is what stands between a scripted edit
+        # and an hour of guessing. If the checker itself is wrong, nothing after it means anything.
+        run: |
+          python3 tools/ci/test_check_workflows.py
+          python3 tools/ci/check_workflows.py
+      - name: APK audit and published-APK acceptance self-tests
+        run: |
+          python3 tools/ci/test_apk_audit.py
+          python3 tools/ci/test_e2e_matrix.py
+          python3 tools/ci/test_verify_acceptance_apk.py
+          python3 tools/ci/test_acceptance_plan.py
+          python3 tools/ci/acceptance_plan.py --check
+          bash -n tools/ci/run_apk_acceptance.sh
+      - name: Website request contract and refusal simulations (offline; no website traffic)
+        run: |
+          python3 tools/ci/test_site_request_trial.py
+          python3 tools/ci/site_request_trial.py --contract
+      - name: Private CDN diary triage self-tests (synthetic IDs only)
+        run: python3 tools/ci/test_triage_hcdn_diary.py
+      - name: Probe self-tests (a diagnostic that silently skips its fallback is worse than none)
+        # probe_live_feed is the tool that decides whether live data is reachable at all, so its own reach-
+        #ability logic is under test: the alternate source must still be asked when the primary is dead, and
+        # two dead sources must produce a report, never an empty confident answer.
+        run: |
+          python3 tools/ci/test_probe_live_feed.py
+          python3 tools/ci/test_probe_history.py
+      - name: Refresher self-tests (the fixture refresher must be print-only, proven not promised)
+        # known_truths_refresh proposes fixture edits and never writes them; its AST is asserted to contain
+        # no write-mode open, because auto-editing the file the gate trusts is the app believing itself.
+        run: python3 tools/ci/test_known_truths_refresh.py
+      - name: Import-gate self-tests (this gate missed the exact miss it exists for, once - 2026-10-12)
+        run: python3 tools/ci/test_check_refs.py
+      - name: Hygiene self-tests (the tool that deletes artifacts must classify, not guess)
+        run: python3 tools/ci/test_artifact_hygiene.py
+      - name: ETL importability + schema constant agreement
+        run: |
+          python3 -c "import sys; sys.path.insert(0, 'tools'); import build_refdb; print('SCHEMA_VERSION', build_refdb.SCHEMA_VERSION)"
+          test "$(python3 -c "import sys; sys.path.insert(0,'tools'); import build_refdb; print(build_refdb.SCHEMA_VERSION)")" \
+            = "$(grep -o 'REFDB_SCHEMA_VERSION", "[0-9]*' app/build.gradle | grep -o '[0-9]*')" \
+            || { echo "REFDB_SCHEMA_VERSION in app/build.gradle does not match tools/build_refdb.py"; exit 1; }
+
+  # The store janitor: artifacts older than 6 h are deleted and runs wedged in_progress over 4 h are
+  # cancelled, on every push. Why a job and not a human: the sandbox token can list but not write
+  # (403 measured 2026-10-12), and one-off cleanups rot - the policy lives where every push enforces it
+  # (ADR-001). Cheap, read-mostly, and it prints one ::notice:: line with the totals.
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Delete stale artifacts, cancel wedged runs
+        env:
+          # gh refuses to run in Actions without a token in the environment; the 3b7a14d run failed on
+          # exactly that. `github.token` + the job's actions: write is the whole authority needed.
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/ci/artifact_hygiene.py
+
+  ui:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    name: tests / ${{ matrix.part }}
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [ui-render, ui-logic, rules, sources]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # The render tests read the *packaged* asset (an asset that survives the ETL but not aapt is a
+      # device-only failure), so this job needs the same generated file the build job ships.
+      - name: Generate the offline timetable asset
+        shell: bash
+        run: bash tools/ci/prepare_asset.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: Unit tests in this independent partition
+        shell: bash
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          set -o pipefail
+          case "$PART" in
+            ui-render|ui-logic)
+              # Every UI test class belongs to exactly one partition, including
+              # classes added later; no hand-maintained list that silently skips one.
+              filters=()
+              for file in app/src/test/java/in/opentrack/india/ui/*Test.kt; do
+                cls=${file##*/}; cls=${cls%.kt}
+                case "$cls" in
+                  InlineRouteRenderTest|ScreenRenderTest|LargeScreenRenderTest|AppearanceRenderTest|VisualContrastTest) slice=ui-render ;;
+                  *) slice=ui-logic ;;
+                esac
+                if [ "$PART" = "$slice" ]; then
+                  filters+=(--tests "in.opentrack.india.ui.$cls")
+                fi
+              done
+              [ "${#filters[@]}" -gt 0 ] || exit 2 ;;
+            rules) filters=(--tests 'in.opentrack.india.core.*' --tests 'in.opentrack.india.domain.*' --tests 'in.opentrack.india.data.*') ;;
+            sources) filters=(--tests 'in.opentrack.india.remote.*' --tests 'in.opentrack.india.v2.*') ;;
+            *) exit 2 ;;
+          esac
+          ./gradlew --no-daemon :app:testDebugUnitTest "${filters[@]}" --stacktrace 2>&1 | tee /tmp/test.log
+      - name: Build WIMT traversal verification PDF report
+        if: matrix.part == 'ui-render'
+        shell: bash
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet reportlab pillow
+          python3 tools/ci/build_wimt_journey_pdf.py app/build/reports/previews/wimt-live-verification-report.pdf "${{ github.sha }}" "${{ github.run_id }}"
+      - uses: actions/upload-artifact@v4
+        if: matrix.part == 'ui-render'
+        with:
+          name: wimt-live-verification-pdf
+          path: app/build/reports/previews/wimt-live-verification-report.pdf
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-previews-${{ matrix.part }}
+          path: app/build/reports/previews/
+          if-no-files-found: warn
+          retention-days: 7
+      # Always retain the machine-readable verdict, not only red reports. The
+      # APK audit counts executed/skipped tests and their exact failing methods.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-results-${{ matrix.part }}
+          path: app/build/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-reports-${{ matrix.part }}
+          path: app/build/reports/tests/
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Report the failure on the commit
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          {
+            echo "### tests / ${{ matrix.part }} failed"
+            echo
+            echo "Tasks that failed:"
+            grep -E "^> Task .* FAILED" /tmp/test.log | sed 's/^> /  - /' || echo "  (none — an earlier step failed)"
+            echo
+            # Each failing test with its assertion message and the file:line that threw. The XML, not the
+            # console: Gradle truncates the very line that explains the failure.
+            python3 tools/ci/test_report.py --dir app/build/test-results || true
+            echo
+            echo "Compiler errors, if any:"
+            echo
+            echo '```'
+            grep "^e: " /tmp/test.log | sed 's|file://[^ ]*/Checktrain02/||' | head -25 || true
+            awk '/\* What went wrong:/,/\* Try:/' /tmp/test.log | head -20 || true
+            echo '```'
+          } > /tmp/report.md
+          gh api -X POST "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -F body=@/tmp/report.md \
+            || echo "::warning::could not post the log comment"
+
+  screens:
+    needs: ui
+    if: always() && needs.ui.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-previews-ui-render
+          path: app/build/reports/previews/
+      # Pixels, not a green tick: `gh api .../commits/$SHA/comments` is readable from anywhere, so the
+      # render is reviewable by whoever wrote it. GitHub strips data: URIs from markdown, hence a code
+      # block of base64 to decode rather than an <img>.
+      - name: Publish the rendered screens onto the commit
+        if: always()
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/ci/preview_comment.py --dir app/build/reports/previews --max-kb 58
+
+  # Compile device-only field tests independently from the installable APK. A red
+  # instrumented source must not hold up the APK or screen tests.
+  field-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate the packaged timetable asset
+        run: bash tools/ci/prepare_asset.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: Compile instrumented field tests
+        run: ./gradlew --no-daemon :app:assembleDebugAndroidTest --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-androidTest
+          path: app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: write
+    steps:
+      - name: Capture ntfy.sh's real poll shape (the crowd parser was written against an assumed shape)
+        # The traveller-report parser filters ntfy's JSON stream by hand, and every on-device poll has
+        # returned "relay answered, 0 reports" while publishes return HTTP 200 - paste #19 even lost the
+        # owner's OWN report. The sandbox has no ntfy egress, so CI - which does - publishes a canned
+        # marker to a throwaway topic and captures the poll bytes as a commit comment (marker "live-feed",
+        # the same channel the erail captures used). The parser gets fixed against THESE bytes, and the
+        # capture doubles as the relay-side verdict: if CI's own publish is missing from CI's own poll,
+        # the relay itself is the broken link. A convenience, never a gate: set +e, check=False.
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          python3 - << 'PY'
+          import json, os, subprocess, time, urllib.request
+          topic = "ct-cap-" + str(os.environ.get("GITHUB_RUN_ID", "0"))
+          payload = '{"trainNo":"00000","stationCode":"CAP","kind":"DEPARTED","railMinute":1025,"reportedAt":1791810000000}'
+          req = urllib.request.Request(
+              "https://ntfy.sh/" + topic, data=payload.encode(), method="POST",
+              headers={"Content-Type": "text/plain; charset=utf-8",
+                       "User-Agent": "OpenTrackIndia-ci/1.0 (capture)"},
+          )
+          pubid = "?"
+          try:
+              pubid = json.loads(urllib.request.urlopen(req, timeout=20).read().decode()).get("id", "?")
+          except Exception as e:
+              print("publish failed:", e)
+          time.sleep(3)
+          try:
+              poll = urllib.request.urlopen(
+                  "https://ntfy.sh/" + topic + "/json?poll=1&since=10m", timeout=20,
+              ).read().decode()
+          except Exception as e:
+              print("poll failed:", e)
+              poll = ""
+          body = ("live-feed ntfy poll shape - publish id=%s, topic=%s, poll=%d bytes\n\n" % (pubid, topic, len(poll))) + poll[:3500]
+          subprocess.run(
+              ["gh", "api", "-X", "POST",
+               "repos/$GITHUB_REPOSITORY/commits/" + os.environ["GITHUB_SHA"] + "/comments",
+               "-f", "body=" + body],
+              check=False, capture_output=True,
+          )
+          print("capture done: publish id", pubid, "poll bytes", len(poll))
+          # Backup mirrors for the ACTUAL-arr/dep path: runningstatus.in is behind Cloudflare on the
+          # owner's phone (paste #21: direct wire HTTP 403, WebView challenge page). Before any parser
+          # is written for a backup, CI captures what those pages REALLY serve for the owner's train
+          # (20651) - no parser against an assumed shape. One commit comment each, marker "live-feed".
+          for name, url in [
+              ("railmitra", "https://railmitra.in/live-running-status/20651"),
+              ("confirmtkt", "https://www.confirmtkt.com/train-running-status/20651"),
+          ]:
+              try:
+                  req = urllib.request.Request(url, headers={
+                      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                  })
+                  page = urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "replace")
+                  mark = ("live-feed %s capture (%d bytes) - " % (name, len(page)))
+                  c = mark + page[:3000]
+                  subprocess.run(
+                      ["gh", "api", "-X", "POST",
+                       "repos/$GITHUB_REPOSITORY/commits/" + os.environ["GITHUB_SHA"] + "/comments",
+                       "-f", "body=" + c],
+                      check=False, capture_output=True,
+                  )
+                  print("captured", name, len(page))
+              except Exception as e:
+                  print("capture failed:", name, e)
+          PY
+
+  build:
+    # No `needs: checks`, on purpose: the static checkers are the agent's safety net, and a false positive
+    # in one of them (one did block this whole run once) must never be the reason a device gets no build.
+    # Gradle assembling the APK is the gate here; `ui` keeps the checker gate because its assertions are
+    # about the same files those checkers read.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # `contents: write` is here for the failure-report step only (a commit comment), so a red build is
+    # legible from anywhere; nothing in this job pushes.
+    name: debug APK
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # The reference timetable DB is a build input (see app/build.gradle's syncRefDb). Building it
+      # from the upstream dump takes a few minutes; it is deterministic, so the same commit always
+      # produces the same bytes.
+      # Verification is part of the ETL run (it rebuilds the expectations from the same dump and
+      # compares), so there is no second "verify" step to keep in sync.
+      - name: Generate the offline timetable asset
+        shell: bash
+        run: bash tools/ci/prepare_asset.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      # Deliberately `assembleDebug` only. The unit tests — including the ones that paint the screens —
+      # run in `ui`, in parallel, and a red render test must not stop an APK from reaching a device.
+      - name: Assemble debug APK
+        shell: bash
+        run: |
+          set -o pipefail
+          # A runner with a cold read-only cache once received HTTP 429 while
+          # resolving Kotlin's Gradle plugin. Retry ONLY the upstream throttle;
+          # compiler/test failures must fail immediately, never be hidden.
+          for attempt in 1 2 3; do
+            if ./gradlew --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee /tmp/build.log; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ] || ! grep -Eq 'status code 429|Too Many Requests' /tmp/build.log; then
+              exit 1
+            fi
+            echo "::warning::Maven returned 429; retrying dependency resolution ($attempt/3)"
+            sleep $((attempt * 20))
+          done
+      - name: Size report (the ultra-lightweight requirement, measured on every build)
+        run: |
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          ls -l "$apk"
+          {
+            echo "### APK size (debug, unsigned)"
+            echo
+            echo "| file | bytes |"
+            echo "| --- | --- |"
+            echo "| $apk | $(stat -c %s "$apk") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opentrack-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          # The installable APK lives on the `latest-apk` RELEASE (permanent, no sign-in, direct URL);
+          # this artifact copy is a convenience only, so its life is short (ADR-001).
+          retention-days: 7
+      # The Actions log host is not reachable from every environment that has to debug this build (the
+      # agent sandbox that writes most of it, for one). Echoing the failure onto the commit through the
+      # REST API — a host that is always reachable — turns "CI is red" into an actual error message,
+      # which is the difference between a fix-up round and a guess.
+      - name: Report the failure on the commit
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # `|| true` on every filter: a step runs under `set -e`, and a grep that matches nothing
+          # would otherwise abort the step that exists to explain the abort. That is exactly how the
+          # first version of this step lost the log it was reporting.
+          set +e
+          {
+            echo "### build failed"
+            echo
+            echo "Tasks that failed:"
+            grep -E "^> Task .* FAILED" /tmp/build.log | sed 's/^> /  - /' || echo "  (none — a test or an early step failed)"
+            echo
+            echo "Failing tests:"
+            grep -E "(FAILED|error:$)" /tmp/build.log | grep -v "^> Task" | head -40 || true
+            echo
+            echo "Assertions:"
+            grep -E "AssertionError|expected:|but was:|No such|ClassNotFound|Unresolved" /tmp/build.log | head -40 || true
+            echo
+            echo "First 60 Kotlin/Java errors:"
+            echo
+            echo '```'
+            grep "^e: " /tmp/build.log | sed 's|file://[^ ]*/Checktrain02/||' | head -60 || true
+            echo '```'
+            echo
+            echo "What went wrong:"
+            echo
+            echo '```'
+            awk '/\* What went wrong:/,/\* Try:/' /tmp/build.log | head -40 || true
+            echo '```'
+            if [ -s /tmp/etl.log ]; then
+              echo
+              echo "<details><summary>etl.log tail</summary>"
+              echo
+              echo '```'
+              tail -c 4000 /tmp/etl.log
+              echo
+              echo '```'
+              echo "</details>"
+            fi
+          } > /tmp/report.md
+          gh api -X POST "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -F body=@/tmp/report.md \
+            || echo "::warning::could not post the log comment"
+
+
+  publish:
+    needs: [build, ui]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: opentrack-debug-apk
+          path: /tmp/apk
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: wimt-live-verification-pdf
+          path: /tmp/pdf
+      - name: Publish APK and WIMT verification PDF on rolling release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          apk=/tmp/apk/app-debug.apk
+          pdf=/tmp/pdf/wimt-live-verification-report.pdf
+          tag=latest-apk
+          ver=$(grep -o 'versionName *\(=[ \t]*\)*"[^"]*"' app/build.gradle | head -1 | sed 's/.*"\(.*\)"/\1/')
+          code=$(grep -o 'versionCode *[0-9]*' app/build.gradle | head -1 | grep -o '[0-9]*')
+          notes="OpenTrack India debug APK with Where Is My Train (WIMT) live source active. Built from ${GITHUB_SHA:0:7}. Download APK: app-debug.apk | Verification Report: wimt-live-verification-report.pdf"
+          gh release create "$tag" --title "Rolling debug APK with WIMT Live" --notes "$notes" --prerelease 2>/dev/null || true
+          if [ -f "$apk" ]; then
+            gh release upload "$tag" "$apk" --clobber
+          fi
+          if [ -f "$pdf" ]; then
+            gh release upload "$tag" "$pdf" --clobber
+          fi
+          gh release edit "$tag" --title "Rolling debug APK with WIMT Live" --notes "$notes" || true
+          {
+            echo "### Published Release Artifacts"
+            echo "- APK: [app-debug.apk](https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/app-debug.apk)"
+            if [ -f "$pdf" ]; then
+              echo "- Verification PDF: [wimt-live-verification-report.pdf](https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/wimt-live-verification-report.pdf)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  traveller-acceptance:
+    # This stage runs AFTER publication and installs the actual downloaded release,
+    # not e2e.yml's independently compiled debug APK. No green assertion is credited
+    # unless the whole-file hash of Android artifact, download and installed base.apk agrees.
+    needs: [build, publish, field-tests]
+    if: github.ref_type == 'branch'
+    name: traveller / published APK / ${{ matrix.profile }} / ${{ matrix.group }}
+    runs-on: ubuntu-latest
+    # SDK/emulator download can retry for 120s before a 240s bounded device
+    # method starts. Do not kill a still-running assertion at the runner limit.
+    # The per-method adb timeout and every acceptance assertion remain unchanged.
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write # post the exact failing user journey to this commit
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [online, offline]
+        # Three independent partitions per profile: no method is lost; the
+        # acceptance_plan self-check fails when a new @Test lacks an assignment.
+        group: [journey, trust, refresh]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify and drive the exact published APK as a traveller
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE: ${{ matrix.profile }}
+          GROUP: ${{ matrix.group }}
+        run: |
+          mkdir -p acceptance-evidence
+          set -o pipefail
+          bash tools/ci/run_apk_acceptance.sh 2>&1 | tee acceptance-evidence/session.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: traveller-evidence-${{ matrix.profile }}-${{ matrix.group }}
+          path: acceptance-evidence/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Post the traveller failure and observed evidence
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE: ${{ matrix.profile }}
+          GROUP: ${{ matrix.group }}
+        run: |
+          { echo "### Published APK traveller acceptance · $PROFILE / $GROUP · FAIL";
+            echo '```'; tail -70 acceptance-evidence/session.log 2>/dev/null || echo 'no session log'; echo '```';
+          } > /tmp/acceptance-failure.md
+          cat /tmp/acceptance-failure.md >> "$GITHUB_STEP_SUMMARY"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" \
+            -F body=@/tmp/acceptance-failure.md || echo '::warning::could not post comment; use job artifact'
+
+  release:
+    # Only for tagged pushes: a release build is the one place R8 and resource shrinking run, so it is
+    # deliberately not on every push (it doubles the wall clock for no benefit until a tag is cut).
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate the offline timetable asset
+        shell: bash
+        run: bash tools/ci/prepare_asset.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+      # If the repository secrets are configured the build is signed with them; otherwise a transient
+      # keystore is generated here so the artifact is still installable for testing. A release that
+      # cannot be installed is not useful to anyone, and a signing key never touches the repository.
+      - name: Provision a transient signing key when none is configured
+        env:
+          KS: ${{ secrets.OPENTRACK_KEYSTORE }}
+        run: |
+          if [ -z "${KS:-}" ]; then
+            keytool -genkeypair -v -keystore /tmp/transient.jks -storepass changeme \
+              -keypass changeme -alias opentrack -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=OpenTrack India, OU=test, O=none, L=NA, S=NA, C=IN"
+            echo "OPENTRACK_KEYSTORE=/tmp/transient.jks" >> "$GITHUB_ENV"
+            echo "OPENTRACK_KEYSTORE_PASSWORD=changeme" >> "$GITHUB_ENV"
+            echo "OPENTRACK_KEY_PASSWORD=changeme" >> "$GITHUB_ENV"
+            echo "OPENTRACK_KEY_ALIAS=opentrack" >> "$GITHUB_ENV"
+            echo "::notice::built with a transient key - not updatable in place"
+          fi
+      - name: Assemble release APK (R8 + resource shrinking)
+        run: ./gradlew --no-daemon :app:assembleRelease --stacktrace
+      - name: Publish the APK on the tag
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/app-release.apk
+          generate_release_notes: true

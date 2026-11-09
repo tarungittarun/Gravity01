@@ -1,0 +1,136 @@
+# Targeted, opt-in source acceptance: a real online emulator, APK, screenshots and
+# strict site-data gate. General E2E stays manual-only; this does not run on normal pushes.
+name: wimt-website-device-acceptance
+on:
+  push:
+    branches: ['arena/6f68e526-checktrain02']
+    paths:
+      - '.github/workflows/wimt-device-acceptance.yml'
+      - 'tools/ci/run_wimt_device.sh'
+      - 'tools/ci/wimt_device_report.py'
+      - 'tools/ci/verify_wimt_screens.py'
+      - 'tools/ci/build_wimt_pdf.py'
+      - 'app/src/androidTest/java/in/opentrack/india/e2e/E2E.kt'
+      - 'app/src/androidTest/java/in/opentrack/india/e2e/WimtWebsiteLiveAcceptanceTest.kt'
+      - 'app/src/main/java/in/opentrack/india/v2/mirror/PublicPageChecks.kt'
+      - 'app/src/main/java/in/opentrack/india/core/WebsiteBrowserRequest.kt'
+      - 'app/src/main/java/in/opentrack/india/ui/LiveViewModel.kt'
+      - 'tools/ci/wimt_recover.py'
+      - 'app/build.gradle' # version/signing changes must not bypass installed-APK acceptance
+      - 'app/src/main/java/in/opentrack/india/core/BuildStamp.kt'
+  workflow_dispatch:
+permissions:
+  contents: write # API-visible redacted verdict and release PDF; raw diary never published
+jobs:
+  device:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[wimt-device]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline strict-result/redaction and workflow checks
+        run: |
+          python3 tools/ci/wimt_device_report.py --self-test
+          python3 tools/ci/check_workflows.py
+          bash -n tools/ci/run_wimt_device.sh
+          python3 tools/ci/verify_wimt_screens.py --self-test
+      - name: Generate offline timetable in the exact APK
+        run: bash tools/ci/prepare_asset.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+      - name: Build app and UI-test APKs from this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest \
+            > /tmp/wimt-browser-build.log 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            { echo '### APK build failed before any website request'; echo '```';
+              grep -E '(^e: |^> |^\* What went wrong:|^Execution failed|^.*FAILED|^.*error:)' \
+                /tmp/wimt-browser-build.log | head -55 | cut -c 1-240 || true;
+              echo '--- last 25 lines ---'; tail -25 /tmp/wimt-browser-build.log | cut -c 1-240;
+              echo '```'; } > /tmp/wimt-browser-build-error.md
+            cat /tmp/wimt-browser-build-error.md >> "$GITHUB_STEP_SUMMARY"
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -F body=@/tmp/wimt-browser-build-error.md > /dev/null || true
+            exit "$rc"
+          fi
+          tail -12 /tmp/wimt-browser-build.log
+      - name: Real emulator · select website · require past card and painted clock
+        run: bash tools/ci/run_wimt_device.sh
+      - name: Evidence-backed result even on boot, build or site refusal
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p wimt-device-evidence
+          if [ ! -s wimt-device-evidence/result.json ]; then
+            echo '{"accepted":false,"verdict":"DEVICE_TEST_NOT_EXECUTED","reason":"build or setup failed; no live source claim"}' > wimt-device-evidence/result.json
+          fi
+          { echo '### Independent .org.in website · source-strict APK device acceptance';
+            echo 'Online emulator, not owner phone or Google WIMT app. A refusal, missing train card or unbooted device is NOT a pass.';
+            echo '```json'; cat wimt-device-evidence/result.json; echo '```';
+            echo "Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"; } \
+            > wimt-device-evidence/report.md
+          python3 tools/ci/wimt_recover.py wimt-device-evidence > /dev/null
+          cat wimt-device-evidence/recovered-report.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -s wimt-device-evidence/screen-verification.json ]; then
+            echo 'Verified in-app PNGs and UI hierarchy:' >> "$GITHUB_STEP_SUMMARY"
+            cat wimt-device-evidence/screen-verification.json >> "$GITHUB_STEP_SUMMARY"
+          elif [ -s wimt-device-evidence/screen-verification-error.txt ]; then
+            tail -2 wimt-device-evidence/screen-verification-error.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            -F body=@wimt-device-evidence/recovered-report.md > /dev/null || \
+            echo '::warning::Commit comment unavailable; inspect run summary/artifact'
+      - name: Make and publish an actual screenshot PDF before artifact cleanup
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build
+          python3 -m pip install --disable-pip-version-check --quiet reportlab==4.2.5
+          pdf=build/wimt-website-device-${GITHUB_RUN_ID}.pdf
+          set +e
+          python3 tools/ci/build_wimt_pdf.py wimt-device-evidence "$pdf" \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" 2> build/pdf-error.txt
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            { echo '### Screenshot PDF unavailable: no qualifying captured UI refusal';
+              echo 'Captured file names (no screenshot pixels altered):';
+              find wimt-device-evidence -type f -printf '%P (%s bytes)\n' | head -35;
+              echo 'Bounded builder error:'; tail -12 build/pdf-error.txt; } > build/pdf-diagnostic.md
+            cat build/pdf-diagnostic.md >> "$GITHUB_STEP_SUMMARY"
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -F body=@build/pdf-diagnostic.md > /dev/null || true
+            exit "$status"
+          fi
+          test -s "$pdf"
+          gh release upload latest-apk "$pdf" --clobber
+          link=https://github.com/${GITHUB_REPOSITORY}/releases/download/latest-apk/$(basename "$pdf")
+          { echo '### Actual APK emulator screenshots (source verdict in result above)';
+            echo "PDF: $link";
+            echo "Source run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}";
+            echo 'This is a NEW device run, not the deleted 42026847014 screenshots. Read the strict source verdict above; a screenshot alone is not a feed success.'; } > build/pdf-report-link.md
+          cat build/pdf-report-link.md >> "$GITHUB_STEP_SUMMARY"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            -F body=@build/pdf-report-link.md > /dev/null
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wimt-device-evidence
+          path: wimt-device-evidence/
+          if-no-files-found: error
+          retention-days: 7

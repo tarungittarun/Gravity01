@@ -1,0 +1,39 @@
+# Pull an ALREADY executed run's artifact on a GitHub runner (sandbox artifact CDN
+# can return EOF); read the failure without another app install or website request.
+name: wimt-device-report-recovery
+on:
+  push:
+    branches: ['arena/6f68e526-checktrain02']
+    paths:
+      - '.github/workflows/wimt-device-report-recovery.yml'
+      - 'tools/ci/wimt_recover.py'
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: 'Existing wimt-device-acceptance run ID; no new provider request'
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: write
+jobs:
+  recover:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[wimt-recover]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wimt-device-evidence
+          run-id: ${{ inputs.source_run || '42026847014' }}
+          github-token: ${{ github.token }}
+          path: recovered-wimt
+      - name: Report actual device failure, no further website request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/wimt_recover.py recovered-wimt
+          cat recovered-wimt/recovered-report.md >> "$GITHUB_STEP_SUMMARY"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            -F body=@recovered-wimt/recovered-report.md > /dev/null

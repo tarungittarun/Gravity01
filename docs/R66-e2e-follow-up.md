@@ -1,0 +1,7 @@
+# Follow-up on device runs · 14 October 2026
+
+Replacement run `38603774454` showed the selector correction exposed the screen: search, tracking, settings and offline classes now execute rather than failing every `By.res` lookup. It is **still red**. Its API-34 check annotations repeatedly identify `E2E.setTextIn`: the harness's Ctrl+A/Delete gesture cannot clear a non-empty field on the emulator, so tests fail *before* the app's search can be judged. The follow-up uses UIAutomator's accessibility `ACTION_SET_TEXT` replacement and reads the value back, rather than simulating keyboard shortcuts.
+
+Cold-start's second test sometimes cannot see the board-at box after a prior test; the harness now waits for MainActivity's Settings control (not merely any package window) and uses the visible Edit search control if the app is intentionally compact. This is a harness repair; it does not certify the cold-start experience. A later completed device run must test it.
+
+The API-34 trial also showed `online` eRail HTTP 200 with no parseable dated halt rows (not demonstrated as a live actuals feed), and no JaCoCo file. The eRail field assertion was changed in R65 to refuse HTML as reported times; coverage remains a separate CI concern until a subsequent completed instrument pass can diagnose its file location. Neither the old 0/9 nor the latest failures are evidence that the source delivers verified actual times. Logs and artifacts still redirect to inaccessible blob storage; the check annotations now contain the important class failures.

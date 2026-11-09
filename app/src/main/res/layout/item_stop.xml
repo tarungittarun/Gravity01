@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Times stay next to each stop. The left pair is the timetable; the right pair
+     is the selected source. A tap discloses intermediate stations, not the time sheet. -->
+<in.opentrack.india.ui.RouteStopGroup xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <!-- A single station band: the schedule, dot/name and selected-source clocks
+         share one vertical origin. The old second tier put each train's times a
+         whole station below its name on a phone, even though the values were right. -->
+    <LinearLayout
+        android:id="@+id/stopRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="72dp"
+        android:orientation="horizontal"
+        android:paddingTop="3dp"
+        android:paddingStart="8dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="3dp">
+        <LinearLayout android:id="@+id/scheduleTimes"
+            android:layout_width="@dimen/col_sched" android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="start" android:orientation="vertical">
+            <TextView android:id="@+id/schedArr" style="@style/TextClockDim"
+                android:minHeight="24dp" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:gravity="start|center_vertical" android:contentDescription="Scheduled arrival" />
+            <TextView android:id="@+id/schedDep" style="@style/TextClockDim"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginTop="3dp" android:minHeight="24dp"
+                android:gravity="start|center_vertical" android:contentDescription="Scheduled departure" />
+            <TextView android:id="@+id/schedDay" style="@style/TextMicro"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginTop="2dp" android:textColor="@color/accent"
+                android:visibility="gone" />
+        </LinearLayout>
+        <!-- The rail is x=122dp: the marker frame begins at x=98 and ends at x=146. -->
+        <FrameLayout
+            android:layout_width="48dp"
+            android:layout_height="72dp"
+            android:layout_marginStart="-18dp"
+            android:layout_marginEnd="-4dp">
+            <View
+                android:id="@+id/stopDot"
+                android:layout_width="12dp"
+                android:layout_height="12dp"
+                android:layout_gravity="center_horizontal|top"
+                android:layout_marginTop="9dp"
+                android:background="@drawable/dot_later" />
+            <in.opentrack.india.ui.StopRailMarkerView
+                android:id="@+id/stopTrainMarker"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_gravity="top|center_horizontal"
+                android:layout_marginTop="2dp"
+                android:visibility="gone" />
+            <!-- Event age sits BELOW the locomotive; scheduled/actual cells remain untouched. -->
+            <TextView android:id="@+id/stopMarkerAge" style="@style/TextMicro"
+                android:layout_width="48dp" android:layout_height="18dp"
+                android:layout_gravity="top|center_horizontal"
+                android:layout_marginTop="52dp"
+                android:gravity="center" android:singleLine="true"
+                android:textSize="9sp" android:textColor="@color/live"
+                android:visibility="gone" />
+        </FrameLayout>
+        <!-- Align the name to the rail icon and first arrival clock even when the
+             redundant halt caption is hidden; avoid a jump on reported stops. -->
+        <LinearLayout android:id="@+id/stationIdentity"
+            android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/haltMarker" style="@style/TextMicro"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:textColor="@color/live" android:visibility="gone" />
+            <TextView android:id="@+id/stopName" style="@style/TextTitle"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:maxLines="2" android:ellipsize="end" />
+            <!-- Shown beside the pinned locomotive only while mapped stations are folded.
+                 Uses this row's already reported stop minute, never a page-update clock. -->
+            <TextView android:id="@+id/stopEventCaption" style="@style/TextMicro"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="3dp" android:maxLines="3"
+                android:textSize="10sp" android:ellipsize="end"
+                android:textColor="@color/text2" android:visibility="gone" />
+            <TextView android:id="@+id/stopMeta" style="@style/TextMicro"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="3dp" android:maxLines="5" />
+            <!-- Other source's past-card clock is a labelled comparison below
+                 the station, never a substituted NTES actual in the right column. -->
+            <TextView android:id="@+id/websitePastComparison" style="@style/TextMicro"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="3dp" android:textSize="11sp"
+                android:textColor="@color/warn" android:visibility="gone" />
+            <TextView android:id="@+id/stopStatus" style="@style/TextMeta"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="4dp" android:maxLines="5" />
+            <TextView android:id="@+id/stopReport" style="@style/TextMicro"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="4dp" android:textColor="@color/warn"
+                android:visibility="gone" />
+        </LinearLayout>
+        <LinearLayout android:id="@+id/reportTimes"
+            android:layout_width="@dimen/route_actual" android:layout_height="wrap_content"
+            android:layout_marginTop="6dp" android:gravity="end"
+            android:orientation="vertical">
+            <TextView android:id="@+id/liveArr" style="@style/TextClock"
+                android:minHeight="24dp" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:maxLines="1" android:gravity="end|center_vertical" />
+            <TextView android:id="@+id/liveDep" style="@style/TextClock"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="3dp" android:minHeight="24dp" android:maxLines="1" android:gravity="end|center_vertical" />
+            <TextView android:id="@+id/liveDay" style="@style/TextMicro"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="2dp" android:gravity="end"
+                android:textColor="@color/accent" android:visibility="gone" />
+            <TextView android:id="@+id/stopPrimaryTime" style="@style/TextMicro"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:visibility="gone" />
+            <TextView android:id="@+id/stopTimeType" style="@style/TextMicro"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:visibility="gone" />
+            <TextView android:id="@+id/stopToggle" style="@style/TextMicro"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:visibility="gone" android:text="Stations  ▾" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Retained as a hidden compatibility anchor for instrumentation; no time sheet. -->
+    <LinearLayout
+        android:id="@+id/stopDetails"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/inlineLegGroup"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:gravity="center_vertical" android:orientation="horizontal"
+            android:paddingStart="148dp" android:paddingEnd="20dp">
+            <TextView
+                android:id="@+id/inlineLegCaption"
+                style="@style/TextMeta"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+            <TextView
+                android:id="@+id/inlineLegAge"
+                style="@style/TextMeta"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:textColor="@color/live" />
+            <TextView
+                android:id="@+id/routeToggle"
+                style="@style/TextMeta"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_marginStart="5dp"
+                android:gravity="center_vertical"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:textColor="@color/live" />
+        </LinearLayout>
+        <in.opentrack.india.ui.InlineLegView
+            android:id="@+id/inlineLeg"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <!-- Names and proportional dots are painted INSIDE inlineLeg, never in a second card. -->
+</in.opentrack.india.ui.RouteStopGroup>
