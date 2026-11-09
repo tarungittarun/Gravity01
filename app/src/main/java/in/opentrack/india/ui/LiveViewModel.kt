@@ -726,7 +726,7 @@ class LiveViewModel(
         }
         val previous = lastAnswer?.position
         val selected = (if (manual) refreshTarget(auto) else mirrorActiveSource)?.takeIf {
-            it in PublicPageChecks.names || it in setOf(WimtCandidate.SOURCE, "erail",
+            it in PublicPageChecks.names || it in setOf(TrackingSources.WIMT, WimtCandidate.SOURCE, "erail",
                 ConfirmTktMirror.SOURCE, RunningStatusMirror.SOURCE) }
         // A user-selected source gets the FIRST request. NTES is only a last fallback,
         // never an automatic preflight that delays a 0.4-second website response.
@@ -746,6 +746,7 @@ class LiveViewModel(
                     val current = _ui.value ?: return@launch
                     val state = current.sourceStates[selected]?.first
                     val usable = state == "live" ||
+                        (selected == TrackingSources.WIMT && manualWimtAnswer != null) ||
                         selected == PublicPageChecks.ORG && WebsiteReportDisplay.usable(
                             state, current.publicSourceAnswered[selected] == true,
                             current.orgWebsiteReport) ||
@@ -836,11 +837,12 @@ class LiveViewModel(
      * labelled past-card timeline when the official request genuinely fails.
      * A newer HTML page clock never outranks an older train event by itself. */
     private fun bestAvailableSource(ui: Ui, rejected: String): String? =
-        listOf("NTES (official)", RunningStatusMirror.SOURCE,
+        listOf(TrackingSources.WIMT, "NTES (official)", RunningStatusMirror.SOURCE,
             ConfirmTktMirror.SOURCE, "erail").firstOrNull { name ->
             name != rejected && ui.sourceStates[name]?.first == "live" &&
                 SourceEvidencePolicy.primaryActuals(name, runIdentified = true,
                     verifiedStopMinutes = when (name) {
+                        TrackingSources.WIMT -> manualWimtAnswer != null
                         "NTES (official)" -> ui.answer.position.provenance == SourceKind.PROVIDER_NTES &&
                             ui.answer.perStop.values.any { it.actualArrivalMin != null || it.actualDepartureMin != null }
                         RunningStatusMirror.SOURCE, ConfirmTktMirror.SOURCE ->
@@ -1938,17 +1940,33 @@ class LiveViewModel(
             reports = selectable[mirrorActiveSource] ?: _ui.value?.reports ?: emptyMap(),
             relayOk = _ui.value?.relayOk ?: true,
             anchorCode = if (orgReport != null) orgReport.intermediate?.precedingHalt
-                ?: orgReport.anchorCode else if (verified != null) lastReported?.code else null,
-            actualsHeadline = verified?.first?.let { if (selected == "last known")
-                "Last known at ${clockAt(mirrorRefreshedAt)} · $it" else it },
-            actualsNext = if (verified != null) nextStatement else null,
-            actualsBadge = if (verified != null) (if (selected == "last known")
-                "CACHED · $selected" else "VERIFIED · $selected") else null,
+                ?: orgReport.anchorCode
+                else if (mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null)
+                    manualWimtAnswer?.anchorStopCode ?: lastReported?.code
+                else if (verified != null) lastReported?.code else null,
+            actualsHeadline = when {
+                mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null ->
+                    manualWimtDetail ?: "Where Is My Train live feed"
+                verified != null -> verified.first.let { if (selected == "last known")
+                    "Last known at ${clockAt(mirrorRefreshedAt)} · $it" else it }
+                else -> null
+            },
+            actualsNext = if (mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null) nextStatement
+                else if (verified != null) nextStatement else null,
+            actualsBadge = when {
+                mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null -> "LIVE · Where Is My Train"
+                verified != null -> if (selected == "last known") "CACHED · $selected" else "VERIFIED · $selected"
+                else -> null
+            },
             actualsLate = receipt?.first,
-            sourcesLine = if (verified != null) mirrorSources else null,
+            sourcesLine = if (mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null)
+                manualWimtDetail ?: "Where Is My Train live feed"
+                else if (verified != null) mirrorSources else null,
             sourceLines = selectable,
             activeSource = selected,
-            actualsSource = if (verified != null) selected else null,
+            actualsSource = if (mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null)
+                TrackingSources.WIMT
+                else if (verified != null) selected else null,
             sourceStates = sourceNames,
             officialRequest = lastOfficialRequest,
             publicSourceAnswered = publicChecks.entries.associate { it.key to it.value.pageAnswered },

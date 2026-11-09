@@ -37,7 +37,7 @@ object WimtLiveProvider {
         originEpochDay: Long,
         nowMillis: Long = System.currentTimeMillis(),
     ): Result {
-        if (!trainNo.matches(Regex("[0-9]{5}"))) {
+        if (!trainNo.matches(Regex("[0-9]{4,5}"))) {
             return Result(null, "Invalid train number")
         }
         val dayStr = SimpleDateFormat("dd-MM-yyyy", Locale.ENGLISH).apply {
@@ -91,7 +91,8 @@ object WimtLiveProvider {
         val perStop = mutableMapOf<String, LiveStopFields>()
         val lines = mutableMapOf<String, String>()
         var curStnDeparted = false
-        var lastDepartedCode: String? = null
+        var lastDepartedRouteCode: String? = null
+        var lastArrivedRouteCode: String? = null
         var lastDelay = 0
 
         for (i in 0 until rows.length()) {
@@ -99,6 +100,10 @@ object WimtLiveProvider {
             val code = row.optString("station_code").uppercase(Locale.ENGLISH)
             if (code.isBlank()) continue
 
+            // WIMT marks unreached future halts with source: "eta".
+            // Their actual_arrival_time/actual_departure_time fields contain predicted ETAs,
+            // NOT observed arrival or departure events.
+            val isEta = row.optString("source").equals("eta", ignoreCase = true)
             val departed = row.optBoolean("departed", false)
             val isCurStn = code.equals(curStnCode, true)
             if (isCurStn && departed) {
@@ -107,9 +112,12 @@ object WimtLiveProvider {
 
             val stopOnRoute = route.stops.firstOrNull { it.code.equals(code, true) }
 
-            // Arrival and departure times
-            val actArrHm = RailTime.parseHm(row.optString("actual_arrival_time").takeIf { it.isNotBlank() })
-            val actDepHm = RailTime.parseHm(row.optString("actual_departure_time").takeIf { it.isNotBlank() })
+            // Arrival and departure times: only parse as actuals if NOT an ETA forecast
+            val rawArr = if (!isEta) row.optString("actual_arrival_time").takeIf { it.isNotBlank() } else null
+            val rawDep = if (!isEta) row.optString("actual_departure_time").takeIf { it.isNotBlank() } else null
+
+            val actArrHm = RailTime.parseHm(rawArr)
+            val actDepHm = RailTime.parseHm(rawDep)
 
             val arrMin = RailTime.alignClock(actArrHm, stopOnRoute?.arrivalMin)
             val depMin = RailTime.alignClock(actDepHm, stopOnRoute?.departureMin)
@@ -120,10 +128,15 @@ object WimtLiveProvider {
             val pf = row.optString("platform").takeIf { it.isNotBlank() && it != "null" }
                 ?: row.optJSONArray("platform_info")?.optJSONObject(0)?.optString("platform_number")
 
-            if (departed || isCurStn) {
-                if (delayDep != null) lastDelay = delayDep
-                else if (delayArr != null) lastDelay = delayArr
-                lastDepartedCode = code
+            if (stopOnRoute != null) {
+                if (departed || rawDep != null) {
+                    lastDepartedRouteCode = code
+                    if (delayDep != null) lastDelay = delayDep
+                    else if (delayArr != null) lastDelay = delayArr
+                } else if (!isEta && rawArr != null) {
+                    lastArrivedRouteCode = code
+                    if (delayArr != null) lastDelay = delayArr
+                }
             }
 
             val fields = LiveStopFields(
@@ -139,22 +152,40 @@ object WimtLiveProvider {
             val lineParts = mutableListOf<String>()
             arrMin?.let { lineParts.add("arr ${RailTime.formatRailMinuteBare(it)}") }
             depMin?.let { lineParts.add("dep ${RailTime.formatRailMinuteBare(it)}") }
-            delayDep?.let { if (it != 0) lineParts.add("${if (it > 0) "+$it" else "$it"}m") }
+            val delayForLine = delayDep ?: delayArr
+            delayForLine?.let { if (it != 0) lineParts.add("${if (it > 0) "+$it" else "$it"}m") }
             pf?.let { lineParts.add("PF $it") }
             if (lineParts.isNotEmpty()) {
                 lines[code] = "$code · " + lineParts.joinToString(" · ")
             }
         }
 
-        val anchorCode = curStnCode.takeIf { it.isNotBlank() } ?: lastDepartedCode ?: route.srcCode
-        val anchorStop = route.stops.firstOrNull { it.code.equals(anchorCode, true) }
-            ?: route.stops.firstOrNull()
-        val anchorSeq = anchorStop?.seq ?: 1
+        // Anchor determination on commercial route:
+        // When curStn is an intermediate crossing or non-commercial halt (not in route.stops),
+        // anchor resolves to the preceding commercial halt on route with departed=true.
+        val curStnOnRoute = route.stops.firstOrNull { it.code.equals(curStnCode, true) }
+        val (anchorStop, isDeparted) = when {
+            curStnOnRoute != null -> curStnOnRoute to curStnDeparted
+            lastDepartedRouteCode != null -> (route.stops.firstOrNull { it.code.equals(lastDepartedRouteCode, true) }
+                ?: route.stops.first()) to true
+            lastArrivedRouteCode != null -> (route.stops.firstOrNull { it.code.equals(lastArrivedRouteCode, true) }
+                ?: route.stops.first()) to false
+            else -> (route.stops.firstOrNull() ?: route.stops.first()) to false
+        }
+
+        val anchorCode = anchorStop.code
+        val anchorSeq = anchorStop.seq
 
         val event = when {
-            curStnDeparted -> StopStatus.DEPARTED
-            anchorCode.isNotBlank() -> StopStatus.ARRIVED
+            isDeparted -> StopStatus.DEPARTED
+            perStop[anchorCode]?.actualArrivalMin != null || curStnCode == anchorCode -> StopStatus.ARRIVED
             else -> StopStatus.UNKNOWN
+        }
+
+        val eventMin = if (isDeparted) {
+            perStop[anchorCode]?.actualDepartureMin ?: perStop[anchorCode]?.actualArrivalMin
+        } else {
+            perStop[anchorCode]?.actualArrivalMin ?: perStop[anchorCode]?.actualDepartureMin
         }
 
         val snapshot = LiveSnapshot(
@@ -162,10 +193,10 @@ object WimtLiveProvider {
             journeyEpochDay = originEpochDay,
             atCode = anchorCode,
             atSeq = anchorSeq,
-            atName = anchorStop?.name ?: anchorCode,
+            atName = anchorStop.name,
             event = event,
-            eventMinute = perStop[anchorCode]?.actualDepartureMin ?: perStop[anchorCode]?.actualArrivalMin,
-            scheduledMinuteAtEvent = anchorStop?.departureMin ?: anchorStop?.arrivalMin,
+            eventMinute = eventMin,
+            scheduledMinuteAtEvent = anchorStop.departureMin ?: anchorStop.arrivalMin,
             nextCode = route.stops.firstOrNull { it.seq > anchorSeq }?.code,
             expectedNextMinute = null,
             delayMinutes = lastDelay,
@@ -177,8 +208,8 @@ object WimtLiveProvider {
             rawNote = "Where Is My Train · updated ${((nowMillis - updateMillis).coerceAtLeast(0) / 60_000)}m ago",
         )
 
-        val detail = "at $anchorCode (${if (curStnDeparted) "departed" else "arrived"}), " +
-            "delay ${if (lastDelay >= 0) "+$lastDelay" else "$lastDelay"}m, ${perStop.size} stops reported"
+        val detail = "at $anchorCode (${if (isDeparted) "departed" else "arrived"}), " +
+            "delay ${if (lastDelay >= 0) "+$lastDelay" else "$lastDelay"}m, ${perStop.count { it.value.actualArrivalMin != null || it.value.actualDepartureMin != null }} actual stops"
         return Result(snapshot, detail, lines, body)
     }
 

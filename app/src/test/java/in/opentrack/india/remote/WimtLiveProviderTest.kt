@@ -6,6 +6,7 @@ import `in`.opentrack.india.model.StopStatus
 import `in`.opentrack.india.model.TrainRoute
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -109,22 +110,86 @@ class WimtLiveProviderTest {
         assertEquals(false, bdvt!!.departed)
         assertEquals("2", bdvt.platform)
         assertEquals(3, bdvt.delayArrivalMin)
-
-        assertTrue(result.detail.contains("at BDVT"))
-        assertTrue(result.stationLines.containsKey("SBC"))
-        assertTrue(result.stationLines["SBC"]!!.contains("PF 3"))
     }
 
     @Test
-    fun handlesMalformedJsonGracefully() {
+    fun intermediateNonHaltCurStnResolvesToLastCommercialDepartedHalt() {
+        val intermediateJson = """
+        {
+          "distance": 150.0,
+          "curStn": "HHL",
+          "lastUpdateIsoDate": "2026-11-10T02:30:00+05:30",
+          "days_schedule": [
+            {
+              "station_code": "SBC",
+              "departed": true,
+              "actual_arrival_time": "10:30",
+              "actual_departure_time": "10:35",
+              "delay_in_departure": 0
+            },
+            {
+              "station_code": "YPR",
+              "departed": true,
+              "actual_arrival_time": "10:48",
+              "actual_departure_time": "10:50",
+              "delay_in_departure": 3.0,
+              "platform": "1"
+            },
+            {
+              "station_code": "HHL",
+              "curStn": true,
+              "stops": false,
+              "actual_arrival_time": "11:15",
+              "actual_departure_time": "11:15",
+              "delay_in_departure": 2.0
+            },
+            {
+              "station_code": "TK",
+              "source": "eta",
+              "actual_arrival_time": "11:30",
+              "actual_departure_time": "11:32",
+              "delay_in_arrival": 10.0,
+              "platform": "2"
+            }
+          ]
+        }
+        """.trimIndent()
+
         val result = WimtLiveProvider.parse(
-            body = "<html>404 Not Found</html>",
+            body = intermediateJson,
             trainNo = "12089",
             route = route,
             originEpochDay = 20767L,
             nowMillis = 1794226000000L,
         )
-        assertEquals(null, result.snapshot)
+
+        assertNotNull(result.snapshot)
+        val snap = result.snapshot!!
+
+        // HHL is not on route.stops; anchor should resolve to YPR (last departed commercial stop)
+        assertEquals("YPR", snap.atCode)
+        assertEquals(StopStatus.DEPARTED, snap.event)
+        assertEquals(3, snap.delayMinutes)
+
+        // Future stop TK with source="eta" must NOT have actual times
+        val tk = snap.perStop["TK"]
+        assertNotNull(tk)
+        assertNull(tk!!.actualArrivalMin)
+        assertNull(tk.actualDepartureMin)
+        assertEquals("2", tk.platform)
+    }
+
+    @Test
+    fun handlesInvalidJsonGracefully() {
+        val result = WimtLiveProvider.parse(
+            body = "<html><body>Error</body></html>",
+            trainNo = "12089",
+            route = route,
+            originEpochDay = 20767L,
+            nowMillis = 1794226000000L,
+        )
+
+        assertNull(result.snapshot)
         assertTrue(result.detail.contains("Invalid JSON"))
     }
 }

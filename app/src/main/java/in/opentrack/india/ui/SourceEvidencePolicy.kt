@@ -16,6 +16,6 @@ object SourceEvidencePolicy {
     fun primaryActuals(source: String?, runIdentified: Boolean, verifiedStopMinutes: Boolean): Boolean =
         runIdentified && verifiedStopMinutes && source in setOf(
             "NTES (official)", "erail", RunningStatusMirror.SOURCE,
-            ConfirmTktMirror.SOURCE, "last known",
+            ConfirmTktMirror.SOURCE, "last known", TrackingSources.WIMT,
         )
 }

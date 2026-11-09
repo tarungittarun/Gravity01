@@ -851,7 +851,8 @@ class TrainActivity : AppCompatActivity() {
             ui.wimtWebPoint != null -> "WEB CACHE · COMPARISON"
             ui.orgWebsiteReport != null -> "SITE REPORT"
             ui.railYatriClaim != null -> "RAILYATRI CLAIM"
-            m.rows.any { it.source == TrackModel.MinuteSource.REPORTED } -> "NTES REPORT"
+            m.rows.any { it.source == TrackModel.MinuteSource.REPORTED } ->
+                if (ui.activeSource == TrackingSources.WIMT) "WIMT LIVE REPORT" else "NTES REPORT"
             else -> "TIMETABLE ONLY"
         }
         binding.heroEyebrow.setTextColor(getColor(if (ui.wimtWebPoint != null ||
@@ -869,7 +870,8 @@ class TrainActivity : AppCompatActivity() {
         } ?: if (SourceEvidencePolicy.comparisonOnly(ui.activeSource)) null
             else if (ui.activeSource in setOf("NTES (official)", "erail", "last known",
                 `in`.opentrack.india.v2.mirror.RunningStatusMirror.SOURCE,
-                `in`.opentrack.india.v2.mirror.ConfirmTktMirror.SOURCE)) {
+                `in`.opentrack.india.v2.mirror.ConfirmTktMirror.SOURCE,
+                TrackingSources.WIMT)) {
                 val reported = m.rows.firstOrNull { it.code.equals(ui.anchorCode, true) &&
                     it.source == TrackModel.MinuteSource.REPORTED &&
                     (it.showArr != null || it.showDep != null) } ?: m.rows.lastOrNull {
@@ -1026,10 +1028,11 @@ class TrainActivity : AppCompatActivity() {
         // sentence available to TalkBack / Info, but present the event, delay and
         // NEXT scheduled stop as separate visual answers. Do not promote a scheduled
         // arrival into a live ETA or infer movement after the last report.
-        if (ui.activeSource == "NTES (official)") {
+        if (ui.activeSource == "NTES (official)" || ui.activeSource == TrackingSources.WIMT) {
             JourneyHero.official(m.rows, ui.anchorCode)?.let { hero ->
                 binding.headline.contentDescription = m.headline
-                binding.headline.text = "Last NTES report: ${hero.title} · now unknown"
+                val srcLabel = if (ui.activeSource == TrackingSources.WIMT) "WIMT" else "NTES"
+                binding.headline.text = "Last $srcLabel report: ${hero.title} · now unknown"
                 binding.next.text = hero.next
                 binding.provenance.text = "Reported stop"
             }
@@ -1116,9 +1119,12 @@ class TrainActivity : AppCompatActivity() {
         stopAdapter.mappedAnchorKm = ui.staticRoute?.stops.orEmpty()
             .associate { it.code.uppercase() to it.schedKm }
         stopAdapter.setRoutePoints(RouteBetween.groupedPoints(ui.staticRoute, ui.route))
-        stopAdapter.sourceNameForMarker = if (ui.activeSource == "NTES (official)") "NTES"
-            else if (ui.activeSource == "last known") "Saved report"
-            else ui.activeSource ?: "Source"
+        stopAdapter.sourceNameForMarker = when (ui.activeSource) {
+            "NTES (official)" -> "NTES"
+            TrackingSources.WIMT -> "WIMT"
+            "last known" -> "Saved report"
+            else -> ui.activeSource ?: "Source"
+        }
         stopAdapter.legWebsiteEventMinute = ui.orgWebsiteReport
             ?.takeIf { it.intermediate != null }?.eventMinute
         stopAdapter.setProjectedLeg(leg)
@@ -1249,7 +1255,7 @@ class TrainActivity : AppCompatActivity() {
 
     private fun updateTableMarker(ui: LiveViewModel.Ui) {
         val rows = ui.model.rows
-        val fromOfficial = ui.activeSource in listOf("NTES (official)", "erail", "last known")
+        val fromOfficial = ui.activeSource in listOf("NTES (official)", "erail", "last known", TrackingSources.WIMT)
         val anchor = ui.anchorCode ?: if (fromOfficial) ui.answer.anchorStopCode else null
         val now = System.currentTimeMillis()
         stopAdapter.websitePendingDeparture = null
@@ -1298,10 +1304,11 @@ class TrainActivity : AppCompatActivity() {
                     "${RailTime.formatRailMinute(ui.orgWebsiteReport!!.eventMinute)}; " +
                     "page update ${RailTime.formatClock(ui.orgWebsiteReport!!.pageUpdatedAt)} is not movement"
             }
-            ui.activeSource == "NTES (official)" && timedHalt != null && elapsed != null -> {
+            (ui.activeSource == "NTES (official)" || ui.activeSource == TrackingSources.WIMT) && timedHalt != null && elapsed != null -> {
                 val minute = (timedHalt.showDep ?: timedHalt.showArr)!!
                 val clock = RailTime.formatRailMinute(minute)
-                binding.age.text = "Freshness: $elapsed · event $clock"
+                val srcPrefix = if (ui.activeSource == TrackingSources.WIMT) "WIMT" else "Freshness"
+                binding.age.text = "$srcPrefix: $elapsed · event $clock"
                 // A new HTTP answer with the same last-stop time cannot redate the delay.
                 // This is the delay *then*, not a prediction of the train's delay now.
                 if (ui.model.delayLabel != "—") {
@@ -1319,7 +1326,7 @@ class TrainActivity : AppCompatActivity() {
             binding.provenance.text = WebsiteReportDisplay.STALE_BADGE
             binding.provenance.setBackgroundResource(R.drawable.bg_badge_problem)
             binding.provenance.setTextColor(getColor(R.color.late))
-        } else if (stale && ui.activeSource == "NTES (official)" && eventAt != null) {
+        } else if (stale && (ui.activeSource == "NTES (official)" || ui.activeSource == TrackingSources.WIMT) && eventAt != null) {
             binding.provenance.text = "NTES · last reported stop · stale"
             binding.provenance.setBackgroundResource(R.drawable.bg_badge_problem)
             binding.provenance.setTextColor(getColor(R.color.late))
@@ -1353,7 +1360,7 @@ class TrainActivity : AppCompatActivity() {
                 ui?.wimtWebPoint != null -> "web point " +
                 "${TableMarker.elapsedLabel((now - ui.wimtWebPoint!!.eventAtMillis).coerceAtLeast(0))} ago" +
                     " · not GPS"
-            active == "NTES (official)" && ui != null -> {
+            (active == "NTES (official)" || active == TrackingSources.WIMT) && ui != null -> {
                 val row = ui.model.rows.lastOrNull {
                     it.source == TrackModel.MinuteSource.REPORTED &&
                         (it.showDep != null || it.showArr != null) }
