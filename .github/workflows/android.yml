@@ -170,6 +170,7 @@ jobs:
             sources) filters=(--tests 'in.opentrack.india.remote.*' --tests 'in.opentrack.india.v2.*') ;;
             *) exit 2 ;;
           esac
+          chmod +x gradlew
           ./gradlew --no-daemon :app:testDebugUnitTest "${filters[@]}" --stacktrace 2>&1 | tee /tmp/test.log
       - name: Build WIMT traversal verification PDF report
         if: matrix.part == 'ui-render'
@@ -275,7 +276,9 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Compile instrumented field tests
-        run: ./gradlew --no-daemon :app:assembleDebugAndroidTest --stacktrace
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleDebugAndroidTest --stacktrace
       - uses: actions/upload-artifact@v4
         with:
           name: acceptance-androidTest
@@ -299,7 +302,8 @@ jobs:
         # the relay itself is the broken link. A convenience, never a gate: set +e, check=False.
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           python3 - << 'PY'
@@ -397,6 +401,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          chmod +x gradlew
           # A runner with a cold read-only cache once received HTTP 429 while
           # resolving Kotlin's Gradle plugin. Retry ONLY the upstream throttle;
           # compiler/test failures must fail immediately, never be hidden.
