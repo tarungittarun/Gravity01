@@ -766,7 +766,9 @@ class TrainActivity : AppCompatActivity() {
                     sourceSelectionTouched = false
                     `in`.opentrack.india.data.Prefs(application as App).defaultTrackingSource =
                         TrackingSources.valid(name)
-                    if (spinnerStates[name]?.first !in listOf("live", "last-known", "candidate") &&
+                    if (name == TrackingSources.WIMT) {
+                        vm.setActiveSource(name)
+                    } else if (spinnerStates[name]?.first !in listOf("live", "last-known", "candidate") &&
                         !(name == `in`.opentrack.india.v2.mirror.PublicPageChecks.ORG &&
                             spinnerStates[name]?.first == "comparison") &&
                         name != "NTES (official)" && name != TrackingSources.OFFICIAL) {
@@ -860,7 +862,7 @@ class TrainActivity : AppCompatActivity() {
             ui.orgWebsiteReport != null || ui.railYatriClaim != null) R.color.warn else R.color.live))
         // Site first clocks belong in the WEBSITE column. Neither their page age
         // nor a revisable last-card departure moves the train out of this halt.
-        val leg = ui.orgWebsiteReport?.let { report ->
+        val leg = (ui.orgWebsiteReport?.let { report ->
             report.intermediate?.let { p ->
                 RouteBetween.siteIntermediateLeg(ui.route, ui.staticRoute,
                     p.precedingHalt, p.followingHalt, p.code, p.mapKm)
@@ -868,7 +870,37 @@ class TrainActivity : AppCompatActivity() {
                     it.source == TrackModel.MinuteSource.SITE_REPORTED })
                 RouteBetween.siteLastStopLeg(ui.route, ui.staticRoute, report.anchorCode)
             else null
-        } ?: if (SourceEvidencePolicy.comparisonOnly(ui.activeSource)) null
+        } ?: (if (ui.activeSource == TrackingSources.WIMT) ui.wimtIntermediate?.let { inter ->
+            val map = ui.staticRoute
+            val pKm = map?.stops?.firstOrNull { it.code.equals(inter.code, true) }?.schedKm
+            if (pKm != null && pKm >= 0) {
+                RouteBetween.siteIntermediateLeg(ui.route, ui.staticRoute,
+                    inter.precedingHalt, inter.followingHalt, inter.code, pKm)
+            } else {
+                val from = ui.route.stops.firstOrNull { it.code.equals(inter.precedingHalt, true) }
+                val to = ui.route.stops.firstOrNull { it.code.equals(inter.followingHalt, true) }
+                if (from != null && to != null) {
+                    val points = ui.staticRoute?.let { RouteBetween.followingPoints(it, ui.route, inter.precedingHalt) }.orEmpty()
+                    val mStart = from.schedKm
+                    val mEnd = to.schedKm
+                    val legPoints = points.map { p ->
+                        val frac = if (mEnd > mStart) (p.schedKm - mStart).toFloat() / (mEnd - mStart) else 0.5f
+                        RouteBetween.LegPoint(p.code, p.name, p.schedKm, frac)
+                    }
+                    RouteBetween.LegProjection(
+                        from = from.name,
+                        to = to.name,
+                        fraction = 0.5f,
+                        nearestPoint = inter.name,
+                        estimateKm = (from.schedKm + to.schedKm) / 2,
+                        fromCode = from.code,
+                        toCode = to.code,
+                        points = legPoints,
+                        markerKind = RouteBetween.MarkerKind.SITE_INTERMEDIATE,
+                    )
+                } else null
+            }
+        } else null)) ?: if (SourceEvidencePolicy.comparisonOnly(ui.activeSource)) null
             else if (ui.activeSource in setOf("NTES (official)", "erail", "last known",
                 `in`.opentrack.india.v2.mirror.RunningStatusMirror.SOURCE,
                 `in`.opentrack.india.v2.mirror.ConfirmTktMirror.SOURCE,
@@ -1130,6 +1162,7 @@ class TrainActivity : AppCompatActivity() {
         }
         stopAdapter.legWebsiteEventMinute = ui.orgWebsiteReport
             ?.takeIf { it.intermediate != null }?.eventMinute
+            ?: ui.wimtIntermediate?.eventMinute
         stopAdapter.setProjectedLeg(leg)
         renderSourceChips(ui)
         updateTableMarker(ui)

@@ -9,14 +9,14 @@ import `in`.opentrack.india.v2.mirror.PublicPageChecks
 object RefreshTargetPolicy {
     /** The initial background survey must not ask the source for an NTES view. */
     fun surveyWebsite(active: String?, alreadyChecked: Boolean): Boolean =
-        (active == TrackingSources.WIMT || active == PublicPageChecks.ORG) && !alreadyChecked
+        active == PublicPageChecks.ORG && !alreadyChecked
 
     /** A first-load refusal must not leave an already answered official source hidden
      * behind a blank table. This changes only the displayed source, never the saved
      * preference, so the next deliberate Refresh still asks the preferred source first. */
     fun afterWebsiteSurvey(displayed: String?, siteReportAvailable: Boolean,
                            officialActualsAvailable: Boolean): String? =
-        if ((displayed == TrackingSources.WIMT || displayed == PublicPageChecks.ORG) &&
+        if (displayed == PublicPageChecks.ORG &&
             !siteReportAvailable && officialActualsAvailable)
             TrackingSources.OFFICIAL else displayed
 

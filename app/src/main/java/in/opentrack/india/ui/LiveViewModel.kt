@@ -170,6 +170,7 @@ class LiveViewModel(
         /** This request's HTTP outcome, distinct from the last valid train observation. */
         val officialRequest: OfficialRequestReceipt? = null,
         val publicSourceAnswered: Map<String, Boolean> = emptyMap(),
+        val wimtIntermediate: `in`.opentrack.india.remote.WimtLiveProvider.WimtIntermediate? = null,
     )
 
     private val _ui = MutableLiveData<Ui?>()
@@ -260,6 +261,8 @@ class LiveViewModel(
     private var wimtCandidate: WimtCandidate.Result? = null
     private var wimtCheckedAt = 0L
     private var manualWimtAnswer: PositionEngine.Answer? = null
+    private var manualWimtResult: `in`.opentrack.india.remote.WimtLiveProvider.Result? = null
+    private var manualWimtIntermediate: `in`.opentrack.india.remote.WimtLiveProvider.WimtIntermediate? = null
     private var manualWimtAt = 0L
     private var manualWimtDetail: String? = null
     private var manualProbeJob: Job? = null
@@ -462,11 +465,18 @@ class LiveViewModel(
                 if (select) _mirrorState.postValue("Checking Where Is My Train…")
                 val u = _ui.value ?: return@launch
                 val route = u.staticRoute ?: u.route
+                val repo = repo()
                 val result = withContext(Dispatchers.IO) {
-                    WimtLiveProvider.fetch(trainNo, route, originEpochDay)
+                    val staticMap = u.staticRoute
+                    WimtLiveProvider.fetch(trainNo, route, originEpochDay) { code ->
+                        staticMap?.stops?.firstOrNull { it.code.equals(code, true) }?.name
+                            ?: repo?.queries?.station(code)?.name
+                    }
                 }
                 if (latestProbeOrder[name] != order) return@launch
                 val now = System.currentTimeMillis()
+                manualWimtResult = result
+                manualWimtIntermediate = result.intermediate
                 val ans = result.snapshot?.let { snap ->
                     PositionEngine.locate(
                         PositionEngine.Request(route, snap, nowMinute(now), now)
@@ -479,6 +489,19 @@ class LiveViewModel(
                 manualProbeMs[name] = now - probeStarted
                 if (select) mirrorActiveSource = name
                 if (select) _mirrorState.postValue("Where Is My Train: ${result.detail}")
+
+                val wimtStops = result.snapshot?.perStop?.mapNotNull { (code, fields) ->
+                    val stopOnRoute = route.stops.firstOrNull { it.code.equals(code, true) }
+                    RunningStatusMirror.Stop(
+                        code,
+                        stopOnRoute?.arrivalMin,
+                        stopOnRoute?.departureMin,
+                        fields.actualArrivalMin,
+                        fields.actualDepartureMin,
+                    )
+                }.orEmpty()
+                mirrorStops = mirrorStops + (TrackingSources.WIMT to wimtStops)
+
                 val latest = _ui.value ?: u
                 _ui.value = buildUi(
                     latest.route,
@@ -540,6 +563,9 @@ class LiveViewModel(
         // Do not spend a website request merely because an NTES screen was opened.
         // If this website is the chosen default, ask it once; otherwise only an
         // explicit selection/Refresh or the existing stale-NTES comparison may ask.
+        if (mirrorActiveSource == TrackingSources.WIMT) {
+            probeSource(TrackingSources.WIMT, select = false)
+        }
         (PublicPageChecks.names.filter { it != PublicPageChecks.ORG ||
             RefreshTargetPolicy.surveyWebsite(mirrorActiveSource, publicChecks[it] != null) } +
             listOf(WimtCandidate.SOURCE, "erail")).forEach {
@@ -1792,9 +1818,9 @@ class LiveViewModel(
         // while the screen kept saying "schedule only". Erail's refusal no longer buries a
         // witness that spoke.
         val selectedMirror = mirrorActiveSource in setOf(RunningStatusMirror.SOURCE,
-            ConfirmTktMirror.SOURCE, "last known")
-        val overlayStops = if (freshShift() && selectedMirror &&
-            (pos.provenance != SourceKind.PROVIDER_NTES || selectedMirrorForTable))
+            ConfirmTktMirror.SOURCE, TrackingSources.WIMT, "last known")
+        val overlayStops = if ((freshShift() || mirrorActiveSource == TrackingSources.WIMT) && selectedMirror &&
+            (pos.provenance != SourceKind.PROVIDER_NTES || selectedMirrorForTable || mirrorActiveSource == TrackingSources.WIMT))
             mirrorStops[mirrorActiveSource].orEmpty() else emptyList()
         val withActuals = when {
             orgReport != null -> WebsiteReportDisplay.rows(labelled, orgReport)
@@ -1956,11 +1982,16 @@ class LiveViewModel(
                 else if (verified != null) lastReported?.code else null,
             actualsHeadline = when {
                 mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null -> {
-                    val statusWord = if (manualWimtAnswer?.position?.status == StopStatus.DEPARTED) "Departed" else "Arrived at"
-                    val anchor = manualWimtAnswer?.anchorStopName ?: manualWimtAnswer?.anchorStopCode ?: "last reported stop"
-                    val delay = manualWimtAnswer?.position?.delayMinutes ?: 0
+                    val inter = manualWimtIntermediate
+                    val delay = (inter?.delayMin ?: manualWimtAnswer?.position?.delayMinutes) ?: 0
                     val delayStr = if (delay > 0) "+${delay}m late" else if (delay < 0) "${delay}m early" else "on time"
-                    "Last WIMT report: $statusWord $anchor · $delayStr"
+                    if (inter != null) {
+                        "Last WIMT report: Near ${inter.name} · $delayStr"
+                    } else {
+                        val statusWord = if (manualWimtAnswer?.position?.status == StopStatus.DEPARTED) "Departed" else "Arrived at"
+                        val anchor = manualWimtAnswer?.anchorStopName ?: manualWimtAnswer?.anchorStopCode ?: "last reported stop"
+                        "Last WIMT report: $statusWord $anchor · $delayStr"
+                    }
                 }
                 verified != null -> verified.first.let { if (selected == "last known")
                     "Last known at ${clockAt(mirrorRefreshedAt)} · $it" else it }
@@ -1974,7 +2005,7 @@ class LiveViewModel(
                 else -> null
             },
             actualsLate = if (mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null)
-                manualWimtAnswer?.position?.delayMinutes
+                manualWimtIntermediate?.delayMin ?: manualWimtAnswer?.position?.delayMinutes
                 else receipt?.first,
             sourcesLine = if (mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null)
                 manualWimtDetail ?: "Where Is My Train live feed"
@@ -2040,6 +2071,7 @@ class LiveViewModel(
                     PublicPageChecks.websiteGap(publicChecks[PublicPageChecks.ORG], route.dstCode)
                 else -> null
             },
+            wimtIntermediate = if (mirrorActiveSource == TrackingSources.WIMT) manualWimtIntermediate else null,
         )
     }
 

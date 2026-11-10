@@ -166,10 +166,16 @@ class WimtLiveProviderTest {
         assertNotNull(result.snapshot)
         val snap = result.snapshot!!
 
+        // Check intermediate
+        assertNotNull(result.intermediate)
+        assertEquals("HHL", result.intermediate?.code)
+        assertEquals("YPR", result.intermediate?.precedingHalt)
+        assertEquals("TK", result.intermediate?.followingHalt)
+
         // HHL is not on route.stops; anchor should resolve to YPR (last departed commercial stop)
         assertEquals("YPR", snap.atCode)
         assertEquals(StopStatus.DEPARTED, snap.event)
-        assertEquals(3, snap.delayMinutes)
+        assertEquals(2, snap.delayMinutes)
 
         // Future stop TK with source="eta" must NOT have actual times
         val tk = snap.perStop["TK"]
@@ -177,6 +183,90 @@ class WimtLiveProviderTest {
         assertNull(tk!!.actualArrivalMin)
         assertNull(tk.actualDepartureMin)
         assertEquals("2", tk.platform)
+    }
+
+    @Test
+    fun parses16315PassingKetohalliIntermediate() {
+        val rStops = listOf(
+            stop(1, "MYS", "MYSURU JN", null, 775, 0),
+            stop(2, "MYA", "MANDYA", 815, 817, 45),
+            stop(3, "MAD", "MADDUR", 834, 835, 64),
+            stop(4, "CPT", "CHANNAPATNA", 851, 852, 82),
+            stop(5, "RMGM", "RAMANAGARAM", 903, 904, 93),
+            stop(6, "KGI", "KENGERI", 942, 943, 126),
+            stop(7, "SBC", "KSR BENGALURU", 985, 995, 138),
+        )
+        val r16315 = TrainRoute(
+            trainNo = "16315", trainName = "KOCHUVELI EXP",
+            srcCode = "MYS", srcName = "MYSURU JN", dstCode = "KCVL", dstName = "KOCHUVELI",
+            totalKm = 964, totalMin = 1380, runDays = 0x7F, returnNo = "16316",
+            stops = rStops,
+            segments = rStops.zipWithNext().mapIndexed { i, (a, b) ->
+                SegmentRow(i + 1, a.code, b.code, b.schedKm - a.schedKm, 60)
+            },
+        )
+        val json = """
+        {
+          "distance": 106.0,
+          "curStn": "KHLL",
+          "lastUpdateIsoDate": "2026-11-10T14:50:56+05:30",
+          "days_schedule": [
+            {
+              "station_code": "RMGM",
+              "station_name": "Ramanagaram",
+              "departed": true,
+              "actual_arrival_time": "14:31",
+              "actual_departure_time": "14:35",
+              "sch_arrival_time": "14:26",
+              "sch_departure_time": "14:27",
+              "platform": "2"
+            },
+            {
+              "station_code": "KHLL",
+              "station_name": "Ketohalli",
+              "curStn": true,
+              "stops": false,
+              "sch_arrival_time": "14:32",
+              "sch_departure_time": "14:32",
+              "actual_arrival_time": "14:46",
+              "actual_departure_time": "14:47",
+              "distance_from_source": 106.0
+            },
+            {
+              "station_code": "KGI",
+              "station_name": "Kengeri",
+              "departed": false,
+              "sch_arrival_time": "14:52",
+              "sch_departure_time": "14:53",
+              "source": "eta",
+              "platform": "2"
+            }
+          ]
+        }
+        """.trimIndent()
+
+        val result = WimtLiveProvider.parse(
+            body = json,
+            trainNo = "16315",
+            route = r16315,
+            originEpochDay = 20768L,
+            nowMillis = 1794303056000L,
+        )
+
+        assertNotNull(result.snapshot)
+        val snap = result.snapshot!!
+        assertEquals("RMGM", snap.atCode)
+        assertEquals(StopStatus.DEPARTED, snap.event)
+
+        // Ketohalli should be detected as intermediate
+        assertNotNull(result.intermediate)
+        val inter = result.intermediate!!
+        assertEquals("KHLL", inter.code)
+        assertEquals("Ketohalli", inter.name)
+        assertEquals("RMGM", inter.precedingHalt)
+        assertEquals("KGI", inter.followingHalt)
+        assertEquals(14, inter.delayMin)
+        assertEquals(14 * 60 + 46, inter.actualMinute)
     }
 
     @Test
