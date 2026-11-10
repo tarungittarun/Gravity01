@@ -862,19 +862,58 @@ Render.save("01-track-schedule", shot.bitmap)
 
     @Test
     fun trackingWhereIsMyTrainLiveSourceRendersCleanly() {
-        val p = pos(anchor = 4, status = StopStatus.ARRIVED, delay = 5, live = true)
-        val wimtStops = mapOf(
-            "SBC" to LiveStopFields(actualArrivalMin = 330, actualDepartureMin = 335, delayDepartureMin = 5, platform = "3", departed = true),
-            "YPA" to LiveStopFields(actualArrivalMin = 356, actualDepartureMin = 359, delayArrivalMin = 4, delayDepartureMin = 5, platform = "1", departed = true),
-            "HSQ" to LiveStopFields(actualArrivalMin = 396, actualDepartureMin = 398, delayArrivalMin = 5, delayDepartureMin = 5, platform = "2", departed = true),
-            "DKPT" to LiveStopFields(actualArrivalMin = 420, actualDepartureMin = 422, delayArrivalMin = 5, delayDepartureMin = 5, platform = "1", departed = false),
+        val stops20651 = listOf(
+            stop(1, "SBC", "KSR BENGALURU", null, 900, 0),
+            stop(2, "YPR", "YESVANTPUR JN", 910, 912, 6),
+            stop(3, "TK", "TUMAKURU", 960, 962, 70),
+            stop(4, "TTR", "TIPTUR", 1008, 1010, 140),
+            stop(5, "ASK", "ARSIKERE JN", 1033, 1035, 166),
+            stop(6, "DRU", "KADUR JN", 1065, 1066, 205),
+            stop(7, "RRB", "BIRUR JN", 1075, 1077, 211),
+            stop(8, "TKE", "TARIKERE JN", 1103, 1105, 235),
+            stop(9, "BDVT", "BHADRAVATI", 1122, 1123, 256),
+            stop(10, "SMET", "SHIVAMOGGA TOWN", 1145, 1150, 274),
+            stop(11, "TLGP", "TALGUPPA", 1300, null, 372),
         )
-        val m = model(p, now = 421, per = wimtStops)
+        val route20651 = TrainRoute(
+            trainNo = "20651",
+            trainName = "SBC TLGP EXP",
+            srcCode = "SBC",
+            srcName = "KSR BENGALURU",
+            dstCode = "TLGP",
+            dstName = "TALGUPPA",
+            totalKm = 372,
+            totalMin = 400,
+            runDays = 0x7F,
+            returnNo = "20652",
+            stops = stops20651,
+            segments = stops20651.zipWithNext().mapIndexed { i, (a, b) ->
+                SegmentRow(
+                    i + 1, a.code, b.code, b.schedKm - a.schedKm,
+                    (b.arrivalMin ?: b.departureMin ?: 0) - (a.departureMin ?: a.arrivalMin ?: 0),
+                )
+            },
+        )
+        val p = TrainPosition(
+            anchorSeq = 5, nextSeq = 6, fraction = 0.5f, kmAlong = 185f, status = StopStatus.DEPARTED,
+            etaNextMinute = 1065, delayMinutes = 0, remainingMin = 235,
+            provenance = SourceKind.PROVIDER,
+            confidence = TrainPosition.Confidence.HIGH, ageSeconds = 45,
+        )
+        val wimtStops = mapOf(
+            "SBC" to LiveStopFields(actualArrivalMin = 900, actualDepartureMin = 900, delayDepartureMin = 0, platform = "8", departed = true),
+            "YPR" to LiveStopFields(actualArrivalMin = 910, actualDepartureMin = 912, delayArrivalMin = 0, delayDepartureMin = 0, platform = "3", departed = true),
+            "TK" to LiveStopFields(actualArrivalMin = 960, actualDepartureMin = 962, delayArrivalMin = 0, delayDepartureMin = 0, platform = "1", departed = true),
+            "TTR" to LiveStopFields(actualArrivalMin = 1008, actualDepartureMin = 1010, delayArrivalMin = 0, delayDepartureMin = 0, platform = "2", departed = true),
+            "ASK" to LiveStopFields(actualArrivalMin = 1033, actualDepartureMin = 1035, delayArrivalMin = 0, delayDepartureMin = 0, platform = "2", departed = true),
+        )
+        val m = TrackModel.build(route20651, p, wimtStops, nowRailMinute = 1050, boardSeq = 1, alightSeq = 11, runEpochDay = 19949L, note = "WIMT LIVE REPORT")
         val shot = Render.render(R.layout.activity_train) { root ->
-            Render.track(root, m, p, 421)
-            Render.text(root, R.id.headline, "at DKPT · +5m late")
-            Render.text(root, R.id.provenance, "Where Is My Train · live · updated 30s ago")
-            Render.text(root, R.id.routeHeadActual, "WIMT")
+            Render.track(root, m, p, 1050, note = "WIMT LIVE REPORT")
+            Render.text(root, R.id.headline, "Last WIMT report: Departed ARSIKERE · on time")
+            Render.text(root, R.id.provenance, "LIVE · Where Is My Train · WIMT: 1 min ago · event 17:15")
+            Render.text(root, R.id.summaryBoxLabel, "SUMMARY BOX WIMT LIVE REPORT")
+            Render.text(root, R.id.routeHeadActual, "ACTUAL")
         }
         Render.save("08-track-wimt-live", shot.bitmap)
     }

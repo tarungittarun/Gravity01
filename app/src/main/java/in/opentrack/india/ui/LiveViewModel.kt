@@ -263,6 +263,7 @@ class LiveViewModel(
     private var manualWimtAnswer: PositionEngine.Answer? = null
     private var manualWimtResult: `in`.opentrack.india.remote.WimtLiveProvider.Result? = null
     private var manualWimtIntermediate: `in`.opentrack.india.remote.WimtLiveProvider.WimtIntermediate? = null
+    private var manualWimtSchedule: Map<String, `in`.opentrack.india.remote.WimtLiveProvider.WimtScheduleHalt> = emptyMap()
     private var manualWimtAt = 0L
     private var manualWimtDetail: String? = null
     private var manualProbeJob: Job? = null
@@ -477,9 +478,21 @@ class LiveViewModel(
                 val now = System.currentTimeMillis()
                 manualWimtResult = result
                 manualWimtIntermediate = result.intermediate
+                manualWimtSchedule = result.scheduleHalts
+                val routeForWimt = if (result.scheduleHalts.isNotEmpty()) {
+                    route.copy(stops = route.stops.map { stop ->
+                        val w = result.scheduleHalts[stop.code.uppercase()]
+                        if (w != null && (w.schArrMin != null || w.schDepMin != null)) {
+                            stop.copy(
+                                arrivalMin = w.schArrMin ?: stop.arrivalMin,
+                                departureMin = w.schDepMin ?: stop.departureMin
+                            )
+                        } else stop
+                    })
+                } else route
                 val ans = result.snapshot?.let { snap ->
                     PositionEngine.locate(
-                        PositionEngine.Request(route, snap, nowMinute(now), now)
+                        PositionEngine.Request(routeForWimt, snap, nowMinute(now), now)
                     )
                 }
                 manualWimtAnswer = ans
@@ -491,7 +504,7 @@ class LiveViewModel(
                 if (select) _mirrorState.postValue("Where Is My Train: ${result.detail}")
 
                 val wimtStops = result.snapshot?.perStop?.mapNotNull { (code, fields) ->
-                    val stopOnRoute = route.stops.firstOrNull { it.code.equals(code, true) }
+                    val stopOnRoute = routeForWimt.stops.firstOrNull { it.code.equals(code, true) }
                     RunningStatusMirror.Stop(
                         code,
                         stopOnRoute?.arrivalMin,
@@ -1749,8 +1762,19 @@ class LiveViewModel(
             provenance = SourceKind.OFFLINE_SCHEDULE, anchorSeq = 0, nextSeq = 0,
             fraction = 0f, delayMinutes = null, etaNextMinute = null, feedStampMillis = null)
         else pos
+        val r = if (wimtSelected && manualWimtSchedule.isNotEmpty()) {
+            route.copy(stops = route.stops.map { stop ->
+                val w = manualWimtSchedule[stop.code.uppercase()]
+                if (w != null && (w.schArrMin != null || w.schDepMin != null)) {
+                    stop.copy(
+                        arrivalMin = w.schArrMin ?: stop.arrivalMin,
+                        departureMin = w.schDepMin ?: stop.departureMin
+                    )
+                } else stop
+            })
+        } else route
         val model = TrackModel.build(
-            route = route, pos = tablePos,
+            route = r, pos = tablePos,
             perStop = if (wimtSelected && wimtAns != null) wimtAns.perStop
                 else if (orgReport != null && orgStop != null) orgReport.rows
                 else if (mirrorSelected || (wimtSelected && wimtAns == null) || publicSelected || officialUnavailable) emptyMap()
@@ -1969,7 +1993,7 @@ class LiveViewModel(
         return Ui(
             // Keep the original official answer in state. The selected source's table-only
             // anchor must NEVER become the next refresh's official position or cross-check.
-            route = route, answer = answer, model = withActuals,
+            route = r, answer = answer, model = withActuals,
             boarding = withActuals.rows.firstOrNull { it.isBoarding },
             alighting = withActuals.rows.firstOrNull { it.isAlighting },
             nowRailMinute = nowRail, tried = tried, loading = false,
@@ -2165,8 +2189,8 @@ class LiveViewModel(
                     if (clock == null || sched == null) return null
                     val shown = if (clock >= 1440) clock else RailTime.alignClock(clock, sched) ?: return null
                     val offset = shown - sched
-                    return shown.takeIf { offset in -10..180 && shown <= nowRail + 2 &&
-                        (origin == null || shown >= origin - 10) && shown >= lastMinute - 2 }
+                    return shown.takeIf { offset in -60..360 && shown <= nowRail + 2 &&
+                        (origin == null || shown >= origin - 60) && shown >= lastMinute - 2 }
                 }
                 val arr = accept(st.actArr, row.schedArr)
                 if (arr != null) lastMinute = arr

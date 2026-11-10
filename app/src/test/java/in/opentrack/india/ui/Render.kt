@@ -255,6 +255,27 @@ object Render {
             isNestedScrollingEnabled = false
             Render.settle(this, m.rows.size)
         }
+        root.findViewById<android.widget.Spinner>(R.id.sourceSpinner)?.apply {
+            val isWimt = m.provenanceLabel.contains("Where Is My Train", ignoreCase = true) ||
+                (note ?: m.note)?.contains("WIMT", ignoreCase = true) == true
+            val shortName = if (isWimt) "WIMT" else "NTES"
+            val textStr = "● " + shortName + "  ▾"
+            val activeColor = if (isWimt) 0xFF4CAF50.toInt() else 0xFF2196F3.toInt()
+            adapter = object : android.widget.ArrayAdapter<String>(
+                context, android.R.layout.simple_spinner_item, listOf(textStr, if (isWimt) "● NTES  ▾" else "● WIMT  ▾"),
+            ) {
+                override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
+                    val view = super.getView(position, convertView, parent)
+                    (view as? android.widget.TextView)?.apply {
+                        text = getItem(position)
+                        textSize = 14f
+                        setTextColor(if (position == 0) activeColor else 0xFF9E9E9E.toInt())
+                    }
+                    return view
+                }
+            }
+            setSelection(0)
+        }
     }
 
     /**

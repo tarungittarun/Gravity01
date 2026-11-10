@@ -37,6 +37,14 @@ object WimtLiveProvider {
         val eventMinute: Int? = null,
     )
 
+    data class WimtScheduleHalt(
+        val code: String,
+        val schArrMin: Int? = null,
+        val schDepMin: Int? = null,
+        val distanceKm: Int? = null,
+        val platform: String? = null,
+    )
+
     data class Result(
         val snapshot: LiveSnapshot?,
         val detail: String,
@@ -44,6 +52,7 @@ object WimtLiveProvider {
         val rawJson: String? = null,
         val intermediate: WimtIntermediate? = null,
         val intermediateStops: List<StopRow> = emptyList(),
+        val scheduleHalts: Map<String, WimtScheduleHalt> = emptyMap(),
     )
 
     fun fetch(
@@ -108,6 +117,7 @@ object WimtLiveProvider {
         val perStop = mutableMapOf<String, LiveStopFields>()
         val lines = mutableMapOf<String, String>()
         val intermediateStops = mutableListOf<StopRow>()
+        val scheduleHalts = mutableMapOf<String, WimtScheduleHalt>()
 
         var curStnDeparted = false
         var curStnIdx = -1
@@ -147,6 +157,17 @@ object WimtLiveProvider {
 
             val schArrHm = RailTime.parseHm(row.optString("sch_arrival_time").takeIf { it.isNotBlank() })
             val schDepHm = RailTime.parseHm(row.optString("sch_departure_time").takeIf { it.isNotBlank() })
+            val distKm = (row.opt("distance") as? Number)?.toInt()
+                ?: (row.opt("distance_from_source") as? Number)?.toInt()
+            val pf = row.optString("platform").takeIf { it.isNotBlank() && it != "null" }
+                ?: row.optJSONArray("platform_info")?.optJSONObject(0)?.optString("platform_number")
+            scheduleHalts[code] = WimtScheduleHalt(
+                code = code,
+                schArrMin = schArrHm,
+                schDepMin = schDepHm,
+                distanceKm = distKm,
+                platform = pf,
+            )
 
             val rawDelayArr = (row.opt("delay_in_arrival") as? Number)?.toInt()
             val rawDelayDep = (row.opt("delay_in_departure") as? Number)?.toInt()
@@ -155,9 +176,6 @@ object WimtLiveProvider {
                 ?: if (actArrHm != null && schArrHm != null) (actArrHm - schArrHm).coerceIn(-120, 1440) else rawDelayArr
             val delayDep = rawDelayDep?.takeIf { it != 0 }
                 ?: if (actDepHm != null && schDepHm != null) (actDepHm - schDepHm).coerceIn(-120, 1440) else rawDelayDep
-
-            val pf = row.optString("platform").takeIf { it.isNotBlank() && it != "null" }
-                ?: row.optJSONArray("platform_info")?.optJSONObject(0)?.optString("platform_number")
 
             if (stopOnRoute != null) {
                 if (departed || rawDep != null) {
@@ -309,7 +327,7 @@ object WimtLiveProvider {
             "at $anchorCode (${if (isDeparted) "departed" else "arrived"}), delay ${if (effectiveDelay >= 0) "+$effectiveDelay" else "$effectiveDelay"}m, ${perStop.count { it.value.actualArrivalMin != null || it.value.actualDepartureMin != null }} actual stops"
         }
 
-        return Result(snapshot, detail, lines, body, wimtIntermediate, intermediateStops)
+        return Result(snapshot, detail, lines, body, wimtIntermediate, intermediateStops, scheduleHalts)
     }
 
     private fun parseIsoMillis(iso: String?): Long? {
