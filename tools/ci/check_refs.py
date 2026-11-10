@@ -52,7 +52,7 @@ def main() -> int:
     decl_pkgs: dict[str, list[tuple[str, pathlib.Path]]] = {}
     pkg_of: dict[pathlib.Path, str] = {}
     for f in files:
-        text = f.read_text()
+        text = f.read_text(encoding="utf-8", errors="replace")
         pm = re.search(r"^package\s+(.+)$", text, re.M)
         if pm:
             pkg_of[f] = pm.group(1).strip().replace("`", "")
@@ -65,7 +65,7 @@ def main() -> int:
     # exactly that through: PairSource.kt imported `in`.opentrack.india.v2.Provenance after the type
     # had moved to .v2.contract, the gate stayed green, and CI's compiler caught it a push later.
     for f in files:
-        text = f.read_text()
+        text = f.read_text(encoding="utf-8", errors="replace")
         for im in re.finditer(r"^import\s+(\S+)$", text, re.M):
             fqn = im.group(1).replace("`", "").rstrip(";").strip()
             if not fqn.startswith("in.opentrack."):
@@ -84,7 +84,7 @@ def main() -> int:
                 problems += 1
                 print(f"{f}: import `{fqn}` but `{name}` is declared in package(s) {have}")
     for f in files:
-        text = f.read_text()
+        text = f.read_text(encoding="utf-8", errors="replace")
         for use in USE.finditer(text):
             owner, member = use.group(1), use.group(2)
             if owner not in decls or member in SYNTHESIZED:
@@ -104,7 +104,7 @@ def main() -> int:
             print(f"{f}: `{owner}.{member}` not found in {opath.name}")
     # also: constructor arg names used in `Type(field = ...)` must exist on the type
     for f in files:
-        text = f.read_text()
+        text = f.read_text(encoding="utf-8", errors="replace")
         for m in re.finditer(r"\b([A-Z]\w*)\(([^)]{5,})\)", text, re.S):
             owner, body = m.group(1), m.group(2)
             if owner not in decls:

@@ -16,26 +16,36 @@ object OfflineCorridorMap {
     private data class Point(val code: String, val name: String, val km: Int)
 
     fun parse(json: String, official: TrainRoute): Result? {
-        if (official.trainNo != "16227" || !official.srcCode.equals("MYS", true) ||
-            !official.dstCode.equals("TLGP", true) || official.stops.size < 3) return null
+        val isForward = (official.trainNo == "16227" || (official.trainNo != "16228" && official.returnNo == "16228")) &&
+            official.srcCode.equals("MYS", true) && official.dstCode.equals("TLGP", true)
+        val isReverse = (official.trainNo == "16228" || (official.trainNo != "16227" && official.returnNo == "16227")) &&
+            official.srcCode.equals("TLGP", true) && official.dstCode.equals("MYS", true)
+        if ((!isForward && !isReverse) || official.stops.size < 3) return null
+        val firstCode = official.stops.first().code.uppercase()
+        val lastCode = official.stops.last().code.uppercase()
+        if (isForward && (firstCode != "MYS" || lastCode != "TLGP")) return null
+        if (isReverse && (firstCode != "TLGP" || lastCode != "MYS")) return null
         val doc = runCatching { JSONObject(json) }.getOrNull() ?: return null
-        if (doc.optString("train") != official.trainNo ||
-            doc.optString("kind") != "historical corridor, not current schedule or location" ||
+        if (doc.optString("kind") != "historical corridor, not current schedule or location" ||
             doc.optString("source_vintage") != "2026-06-20") return null
         val arr = doc.optJSONArray("points") ?: return null
         if (arr.length() < 30 || arr.length() > 200) return null
-        val points = (0 until arr.length()).map { i ->
+        val rawPoints = (0 until arr.length()).map { i ->
             val row = arr.optJSONArray(i) ?: return null
             Point(row.optString(0).trim().uppercase(), row.optString(1).trim(), row.optInt(2, -1))
         }
-        if (points.first().code != "MYS" || points.first().km != 0 ||
-            points.last().code != "TLGP" || points.any { it.name.isEmpty() || it.km < 0 } ||
+        val points = if (isReverse) {
+            val maxKm = rawPoints.last().km
+            rawPoints.reversed().map { Point(it.code, it.name, maxKm - it.km) }
+        } else rawPoints
+        if (points.first().code != firstCode || points.first().km != 0 ||
+            points.last().code != lastCode || points.any { it.name.isEmpty() || it.km < 0 } ||
             points.map { it.code }.distinct().size != points.size ||
             points.zipWithNext().any { (a, b) -> b.km <= a.km }) return null
         val byCode = points.withIndex().associate { it.value.code to it.index }
         val officialCodes = official.stops.map { it.code.uppercase() }
         if (officialCodes.distinct().size != officialCodes.size ||
-            officialCodes.first() != "MYS" || officialCodes.last() != "TLGP") return null
+            officialCodes.first() != firstCode || officialCodes.last() != lastCode) return null
         val halts = officialCodes.toSet()
         val routeStops = mutableListOf<StopRow>()
         val covered = linkedSetOf<String>()

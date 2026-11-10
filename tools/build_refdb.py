@@ -385,7 +385,7 @@ def fetch_sources(cache_dir: str, allow_clone: bool) -> dict[str, dict[str, str]
                 subprocess.run(["git", "-C", dest, "checkout", "HEAD", "--", *want],
                               capture_output=True, text=True)
             else:
-                subprocess.run(["rm", "-rf", dest], capture_output=True, text=True)
+                shutil.rmtree(dest, ignore_errors=True)
                 subprocess.run(["git", "clone", "--depth", "1", "--filter=blob:none", "--sparse",
                                f"https://github.com/{repo}.git", dest],
                               check=True, capture_output=True, text=True)

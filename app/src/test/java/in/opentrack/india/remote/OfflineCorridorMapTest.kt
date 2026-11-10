@@ -73,4 +73,29 @@ class OfflineCorridorMapTest {
         assertNull(OfflineCorridorMap.parse(json, official().copy(trainNo = "16228")))
         assertNull(OfflineCorridorMap.parse("<html>maintenance</html>", official()))
     }
+
+    @Test fun reversePairTrain16228HasIntermediatePassingStations() {
+        val revCodes = codes.reversed()
+        val km = JSONObject(json).getJSONArray("points")
+        val maxKm = km.getJSONArray(km.length() - 1).getInt(2)
+        val byCode = (0 until km.length()).associate { i ->
+            val row = km.getJSONArray(i)
+            row.getString(0) to ((maxKm - row.getInt(2)) * 510 / 512)
+        }
+        val stops = revCodes.mapIndexed { i, c ->
+            StopRow(i + 1, c, c, null, null, null, 1200 + i * 8, 1201 + i * 8,
+                1, byCode[c] ?: i * 15, true)
+        }
+        val route16228 = TrainRoute("16228", "Talguppa - Mysuru Express", "TLGP", "Talguppa", "MYS",
+            "Mysuru", 510, 500, null, "16227", stops, emptyList())
+        val result = OfflineCorridorMap.parse(json, route16228)
+        assertNotNull("16228 corridor must parse reverse direction", result)
+        val map = result!!.route
+        val groups = RouteBetween.groupedPoints(map, route16228)
+        val tkPoints = groups["TK"].orEmpty().map { it.code }
+        assertTrue("TK-YPR intermediate passing stations must be present", tkPoints.isNotEmpty())
+        assertTrue("KIAT must be on TK-YPR leg", "KIAT" in tkPoints)
+        assertTrue("HHL must be on TK-YPR leg", "HHL" in tkPoints)
+        assertTrue("DBL must be on TK-YPR leg", "DBL" in tkPoints)
+    }
 }

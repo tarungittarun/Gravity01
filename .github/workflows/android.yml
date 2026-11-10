@@ -514,7 +514,7 @@ jobs:
           tag=latest-apk
           ver=$(grep -o 'versionName *\(=[ \t]*\)*"[^"]*"' app/build.gradle | head -1 | sed 's/.*"\(.*\)"/\1/')
           code=$(grep -o 'versionCode *[0-9]*' app/build.gradle | head -1 | grep -o '[0-9]*')
-          notes="OpenTrack India debug APK with Where Is My Train (WIMT) live source active. Built from ${GITHUB_SHA:0:7}. Download APK: app-debug.apk | Verification Report: wimt-live-verification-report.pdf"
+          notes="OpenTrack India debug APK with Where Is My Train (WIMT) live source active. Built from ${GITHUB_SHA:0:7} (run ${GITHUB_RUN_ID}). Download APK: app-debug.apk | Verification Report: wimt-live-verification-report.pdf"
           gh release create "$tag" --title "Rolling debug APK with WIMT Live" --notes "$notes" --prerelease 2>/dev/null || true
           if [ -f "$apk" ]; then
             gh release upload "$tag" "$apk" --clobber

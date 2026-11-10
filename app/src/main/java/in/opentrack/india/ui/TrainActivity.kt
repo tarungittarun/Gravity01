@@ -768,7 +768,8 @@ class TrainActivity : AppCompatActivity() {
                         TrackingSources.valid(name)
                     if (spinnerStates[name]?.first !in listOf("live", "last-known", "candidate") &&
                         !(name == `in`.opentrack.india.v2.mirror.PublicPageChecks.ORG &&
-                            spinnerStates[name]?.first == "comparison")) {
+                            spinnerStates[name]?.first == "comparison") &&
+                        name != "NTES (official)" && name != TrackingSources.OFFICIAL) {
                         // API 24's Toast layout must use the framework inflater: the
                         // Activity's AppCompat factory crashes on its system TextView
                         // (StringBlock pooled-string index outside the Toast XML pool).
@@ -1032,9 +1033,11 @@ class TrainActivity : AppCompatActivity() {
             JourneyHero.official(m.rows, ui.anchorCode)?.let { hero ->
                 binding.headline.contentDescription = m.headline
                 val srcLabel = if (ui.activeSource == TrackingSources.WIMT) "WIMT" else "NTES"
-                binding.headline.text = "Last $srcLabel report: ${hero.title} · now unknown"
-                binding.next.text = hero.next
-                binding.provenance.text = "Reported stop"
+                if (ui.activeSource != TrackingSources.WIMT || ui.actualsHeadline == null) {
+                    binding.headline.text = "Last $srcLabel report: ${hero.title} · now unknown"
+                }
+                binding.next.text = ui.actualsNext ?: hero.next
+                binding.provenance.text = ui.actualsBadge ?: if (ui.activeSource == TrackingSources.WIMT) "WIMT · Reported stop" else "Reported stop"
             }
         }
         // No source event before the origin's scheduled departure: say what the
@@ -1327,7 +1330,8 @@ class TrainActivity : AppCompatActivity() {
             binding.provenance.setBackgroundResource(R.drawable.bg_badge_problem)
             binding.provenance.setTextColor(getColor(R.color.late))
         } else if (stale && (ui.activeSource == "NTES (official)" || ui.activeSource == TrackingSources.WIMT) && eventAt != null) {
-            binding.provenance.text = "NTES · last reported stop · stale"
+            val srcPrefix = if (ui.activeSource == TrackingSources.WIMT) "WIMT" else "NTES"
+            binding.provenance.text = "$srcPrefix · last reported stop · stale"
             binding.provenance.setBackgroundResource(R.drawable.bg_badge_problem)
             binding.provenance.setTextColor(getColor(R.color.late))
         }

@@ -18,6 +18,7 @@ import `in`.opentrack.india.domain.RouteBetween
 import `in`.opentrack.india.domain.Suggestion
 import `in`.opentrack.india.domain.TrackModel
 import `in`.opentrack.india.model.SourceKind
+import `in`.opentrack.india.model.StopStatus
 import `in`.opentrack.india.model.StopRow
 import `in`.opentrack.india.model.TrainPosition
 import `in`.opentrack.india.model.TrainRoute
@@ -279,14 +280,15 @@ class LiveViewModel(
      * its table; on refusal that source shows the timetable and its own failure, never NTES
      * actuals mislabeled as the selected website's observations. */
     fun setActiveSource(name: String) {
-        if (name == "NTES (official)" || name == "last known") {
+        if (name == "NTES (official)" || name == TrackingSources.OFFICIAL || name == "last known") {
             // Switching back while a different manual source is in flight must not
             // let that older reply re-select itself over the traveller's tap.
             manualProbeJob?.cancel()
             manualProbeSource = null
             mirrorActiveSource = name
             val u = _ui.value ?: return
-            _ui.postValue(buildUi(u.route, lastAnswer ?: u.answer, u.tried).copy(relayOk = u.relayOk))
+            _ui.value = buildUi(u.route, lastAnswer ?: u.answer, u.tried).copy(relayOk = u.relayOk)
+            Diary.get()?.log("SOURCE", "active source set to $name")
             return
         }
         if (name == "erail") {
@@ -512,6 +514,14 @@ class LiveViewModel(
             }
             if (select) manualProbeJob = job
             return job
+        } else if (name == "NTES (official)" || name == TrackingSources.OFFICIAL) {
+            if (select) mirrorActiveSource = name
+            val job = viewModelScope.launch {
+                if (select) _mirrorState.postValue("Checking NTES (official)…")
+                refreshBody(lastAnswer?.position)
+            }
+            if (select) manualProbeJob = job
+            return job
         } else if (select) _mirrorState.postValue("$name: no verified per-stop endpoint is configured")
         return null
     }
@@ -730,7 +740,7 @@ class LiveViewModel(
                 ConfirmTktMirror.SOURCE, RunningStatusMirror.SOURCE) }
         // A user-selected source gets the FIRST request. NTES is only a last fallback,
         // never an automatic preflight that delays a 0.4-second website response.
-        if ((manual || `in`.opentrack.india.data.Prefs(app).batteryMode) && selected != null) {
+        if (selected != null && (selected == TrackingSources.WIMT || manual || `in`.opentrack.india.data.Prefs(app).batteryMode)) {
             liveRefreshJob = viewModelScope.launch {
                 try {
                     // A page probe needs the route. In battery mode do NOT silently ask NTES
@@ -1945,8 +1955,13 @@ class LiveViewModel(
                     manualWimtAnswer?.anchorStopCode ?: lastReported?.code
                 else if (verified != null) lastReported?.code else null,
             actualsHeadline = when {
-                mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null ->
-                    manualWimtDetail ?: "Where Is My Train live feed"
+                mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null -> {
+                    val statusWord = if (manualWimtAnswer?.position?.status == StopStatus.DEPARTED) "Departed" else "Arrived at"
+                    val anchor = manualWimtAnswer?.anchorStopName ?: manualWimtAnswer?.anchorStopCode ?: "last reported stop"
+                    val delay = manualWimtAnswer?.position?.delayMinutes ?: 0
+                    val delayStr = if (delay > 0) "+${delay}m late" else if (delay < 0) "${delay}m early" else "on time"
+                    "Last WIMT report: $statusWord $anchor · $delayStr"
+                }
                 verified != null -> verified.first.let { if (selected == "last known")
                     "Last known at ${clockAt(mirrorRefreshedAt)} · $it" else it }
                 else -> null
@@ -1958,7 +1973,9 @@ class LiveViewModel(
                 verified != null -> if (selected == "last known") "CACHED · $selected" else "VERIFIED · $selected"
                 else -> null
             },
-            actualsLate = receipt?.first,
+            actualsLate = if (mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null)
+                manualWimtAnswer?.position?.delayMinutes
+                else receipt?.first,
             sourcesLine = if (mirrorActiveSource == TrackingSources.WIMT && manualWimtAnswer != null)
                 manualWimtDetail ?: "Where Is My Train live feed"
                 else if (verified != null) mirrorSources else null,

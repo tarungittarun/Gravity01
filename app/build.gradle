@@ -225,9 +225,13 @@ tasks.register("syncRefDb") {
 }
 
 static def execQuiet(String bin) {
-    def p = new ProcessBuilder(bin, "--version").redirectErrorStream(true).start()
-    p.waitFor()
-    p.exitValue() == 0
+    try {
+        def p = new ProcessBuilder(bin, "--version").redirectErrorStream(true).start()
+        p.waitFor()
+        p.exitValue() == 0
+    } catch (Throwable ignored) {
+        false
+    }
 }
 
 tasks.register("verifyRefDb") {
