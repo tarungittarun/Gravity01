@@ -273,7 +273,9 @@ object WimtLiveProvider {
             else -> StopStatus.UNKNOWN
         }
 
-        val eventMin = if (isDeparted) {
+        val eventMin = if (wimtIntermediate != null) {
+            wimtIntermediate.actualMinute ?: wimtIntermediate.eventMinute
+        } else if (isDeparted) {
             perStop[anchorCode]?.actualDepartureMin ?: perStop[anchorCode]?.actualArrivalMin
         } else {
             perStop[anchorCode]?.actualArrivalMin ?: perStop[anchorCode]?.actualDepartureMin

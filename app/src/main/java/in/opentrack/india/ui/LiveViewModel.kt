@@ -564,7 +564,7 @@ class LiveViewModel(
         // If this website is the chosen default, ask it once; otherwise only an
         // explicit selection/Refresh or the existing stale-NTES comparison may ask.
         if (mirrorActiveSource == TrackingSources.WIMT) {
-            probeSource(TrackingSources.WIMT, select = false)
+            probeSource(TrackingSources.WIMT, select = true)
         }
         (PublicPageChecks.names.filter { it != PublicPageChecks.ORG ||
             RefreshTargetPolicy.surveyWebsite(mirrorActiveSource, publicChecks[it] != null) } +
